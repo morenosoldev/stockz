@@ -1,0 +1,106 @@
+# ==============================================================================
+# Recover-Bot Configuration
+# ==============================================================================
+# This YAML file provides default configuration values.
+# Environment variables override these values.
+#
+# See .env.example for available environment variables.
+
+# ------------------------------------------------------------------------------
+# Application Settings
+# ------------------------------------------------------------------------------
+app:
+  name: "Recover-Bot"
+  version: "1.0.0"
+  debug: false
+  env: "development"
+  log_level: "INFO"
+  log_format: "json"  # json or text
+  structured_logging: true
+
+# ------------------------------------------------------------------------------
+# Database Configuration
+# ------------------------------------------------------------------------------
+database:
+  url: "postgresql://recoverbot:recoverbot@localhost:5432/recoverbot"
+  pool_size: 10
+  max_overflow: 20
+  pool_timeout: 30
+  pool_recycle: 3600
+  echo: false  # Set to true to log all SQL queries
+
+# ------------------------------------------------------------------------------
+# Scheduler Configuration
+# ------------------------------------------------------------------------------
+scheduler:
+  cron_schedule: "30 16 * * *"  # Daily at 16:30 UTC (after US market close)
+  timezone: "UTC"
+  enabled: true
+  max_instances: 1
+  coalesce: true  # Combine missed runs
+  misfire_grace_time: 300  # 5 minutes
+
+# ------------------------------------------------------------------------------
+# Scanner Configuration
+# ------------------------------------------------------------------------------
+scanner:
+  universe_size: 2000  # Number of tickers to scan
+  concurrency: 50  # Concurrent ticker processing
+  timeout: 600  # Scanner timeout in seconds (10 minutes)
+  cache_ttl_seconds: 3600  # Cache TTL (1 hour)
+  retry_attempts: 3
+  retry_backoff: 2.0  # Exponential backoff multiplier
+
+# ------------------------------------------------------------------------------
+# Data Sources
+# ------------------------------------------------------------------------------
+datasources:
+  price_provider: "yahoo_finance"  # yahoo_finance or alpha_vantage
+  yahoo_finance_api_key: null  # Optional (uses public API if null)
+  alpha_vantage_api_key: null  # Required if using alpha_vantage
+  news_api_key: null  # Required for news sentiment features
+  api_timeout: 30
+  api_retry_attempts: 3
+
+  # Cache configuration for data adapters
+  cache:
+    cache_dir: "data/cache"  # Directory for cached data
+    ttl_seconds: 3600  # Default TTL (1 hour)
+    use_compression: false  # Compression support (future feature)
+    auto_cleanup: true  # Automatically clean expired entries
+
+# ------------------------------------------------------------------------------
+# Strategy Configuration
+# ------------------------------------------------------------------------------
+strategies:
+  enabled_strategies:
+    - "drop5"
+  min_score_threshold: 0.5  # Minimum score to be considered a candidate
+
+# ------------------------------------------------------------------------------
+# Feature Engineering
+# ------------------------------------------------------------------------------
+features:
+  version: "1.0.0"
+  atr_window: 14  # Average True Range window
+  rsi_window: 14  # Relative Strength Index window
+  sma_window: 50  # Simple Moving Average window
+  volume_window: 20  # Volume analysis window
+
+# ------------------------------------------------------------------------------
+# Evaluation & Backtesting
+# ------------------------------------------------------------------------------
+evaluation:
+  recovery_window_days: 5  # Days to check for recovery (T+1 to T+5)
+  recovery_threshold_pct: 3.0  # Recovery threshold percentage
+
+# ------------------------------------------------------------------------------
+# API Configuration
+# ------------------------------------------------------------------------------
+api:
+  host: "0.0.0.0"
+  port: 8000
+  docs_enabled: true  # Enable Swagger UI
+  cors_origins:
+    - "http://localhost:3000"
+    - "http://localhost:8000"

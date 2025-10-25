@@ -35,3 +35,15 @@ yarn-error.log
 # Environment
 .env
 .env.local
+
+# Logs
+logs/*.log
+logs/*.log.*
+*.log
+*.log.*
+
+# Data
+data/
+cache/
+*.db
+*.sqlite

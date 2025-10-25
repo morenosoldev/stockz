@@ -1,0 +1,11 @@
+name: drop5
+version: 1.0.0
+description: "Identifies stocks with 5-15% drops showing oversold conditions and volume spikes"
+enabled: true
+parameters:
+  min_drop_pct: 5.0
+  max_drop_pct: 15.0
+  rsi_oversold: 30.0
+  volume_threshold: 2.0
+  recovery_window: 5
+  recovery_threshold: 0.8

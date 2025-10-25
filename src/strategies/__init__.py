@@ -1,0 +1,1 @@
+"""Strategy plug-in system."""

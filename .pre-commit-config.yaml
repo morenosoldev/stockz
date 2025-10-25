@@ -1,0 +1,96 @@
+# Pre-commit hooks for recover-bot
+# Install: pre-commit install
+# Run manually: pre-commit run --all-files
+# Update hooks: pre-commit autoupdate
+
+repos:
+  # Ruff - Fast Python linter (replaces flake8, isort, etc.)
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.14.2
+    hooks:
+      # Run the linter
+      - id: ruff
+        args: [--fix, --exit-non-zero-on-fix]
+      # Run the formatter
+      - id: ruff-format
+
+  # Black - Python code formatter
+  - repo: https://github.com/psf/black
+    rev: 25.9.0
+    hooks:
+      - id: black
+        language_version: python3.13
+        args: [--line-length=100]
+
+  # Mypy - Static type checker
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.18.2
+    hooks:
+      - id: mypy
+        additional_dependencies:
+          - types-pyyaml
+          - types-python-dateutil
+          - sqlalchemy[mypy]
+          - pydantic
+          - pydantic-settings
+        args: [--strict, --ignore-missing-imports]
+        exclude: ^(tests/|scripts/|trading-bot/)
+
+  # General file checks
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      # Prevent giant files from being committed
+      - id: check-added-large-files
+        args: [--maxkb=1000]
+      # Check for files that would conflict in case-insensitive filesystems
+      - id: check-case-conflict
+      # Check for merge conflicts
+      - id: check-merge-conflict
+      # Check for debugger imports and py37+ breakpoint() calls
+      - id: debug-statements
+      # Check for valid JSON
+      - id: check-json
+      # Check for valid TOML
+      - id: check-toml
+      # Check for valid YAML
+      - id: check-yaml
+        args: [--unsafe]  # Allow custom YAML tags
+      # Ensure files end with newline
+      - id: end-of-file-fixer
+      # Remove trailing whitespace
+      - id: trailing-whitespace
+        args: [--markdown-linebreak-ext=md]
+      # Sort entries in requirements.txt
+      - id: requirements-txt-fixer
+
+  # Pytest - Run tests before commit (optional, can be slow)
+  # Uncomment to enable automatic test running
+  # - repo: local
+  #   hooks:
+  #     - id: pytest
+  #       name: pytest
+  #       entry: pytest
+  #       language: system
+  #       pass_filenames: false
+  #       always_run: true
+  #       args: [tests/, --cov=src, --cov-report=term-missing, -v]
+
+# Exclude patterns
+exclude: |
+  (?x)^(
+      \.vscode/|
+      \.git/|
+      \.pytest_cache/|
+      \.mypy_cache/|
+      \.ruff_cache/|
+      __pycache__/|
+      .*\.egg-info/|
+      dist/|
+      build/|
+      data/|
+      logs/|
+      htmlcov/|
+      \.coverage|
+      alembic/versions/.*\.py
+  )$

@@ -30,6 +30,9 @@ repos:
         additional_dependencies:
           - types-pyyaml
           - types-python-dateutil
+          - types-requests
+          - pandas-stubs
+          - types-sqlalchemy
           - sqlalchemy[mypy]
           - pydantic
           - pydantic-settings

@@ -30,7 +30,69 @@ from src.ops.logging import get_logger
 logger = get_logger(__name__)
 
 
+def _fetch_sp500_tickers() -> list[str]:
+    """Fetch S&P 500 ticker list from Wikipedia.
+
+    Returns:
+        List of S&P 500 ticker symbols
+    """
+    try:
+        # Use requests with a user-agent to avoid 403
+        from io import StringIO
+
+        import requests
+
+        url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+        response = requests.get(url, headers=headers, timeout=10)
+        response.raise_for_status()
+
+        # Parse HTML tables
+        tables = pd.read_html(StringIO(response.text))
+        sp500_table = tables[0]
+        tickers: list[str] = sp500_table["Symbol"].tolist()
+
+        # Clean tickers (some may have . instead of -)
+        tickers = [t.replace(".", "-") for t in tickers]
+
+        logger.info(f"Fetched {len(tickers)} S&P 500 tickers from Wikipedia")
+        return tickers
+    except Exception as e:
+        logger.warning(f"Failed to fetch S&P 500 tickers: {e}")
+        return []
+
+
+def _fetch_nasdaq100_tickers() -> list[str]:
+    """Fetch NASDAQ-100 ticker list from Wikipedia.
+
+    Returns:
+        List of NASDAQ-100 ticker symbols
+    """
+    try:
+        # Use requests with a user-agent to avoid 403
+        from io import StringIO
+
+        import requests
+
+        url = "https://en.wikipedia.org/wiki/NASDAQ-100"
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+        response = requests.get(url, headers=headers, timeout=10)
+        response.raise_for_status()
+
+        # Parse HTML tables
+        tables = pd.read_html(StringIO(response.text))
+        nasdaq_table = tables[4]  # The constituent table is typically the 5th table
+        tickers: list[str] = nasdaq_table["Ticker"].tolist()
+
+        logger.info(f"Fetched {len(tickers)} NASDAQ-100 tickers from Wikipedia")
+        return tickers
+    except Exception as e:
+        logger.warning(f"Failed to fetch NASDAQ-100 tickers: {e}")
+        return []
+
+
 # Default ticker universe for MVP (top liquid US stocks)
+# Used as fallback if dynamic fetching fails
 DEFAULT_UNIVERSE = [
     # Tech Giants
     "AAPL",
@@ -121,48 +183,91 @@ class PriceAdapter(BaseDataAdapter):
         else:
             self.cache = cache
 
+        # Rate limiting: Add small delay between API calls to avoid 429 errors
+        self._request_delay = 0.1  # 100ms delay between requests
+        self._last_request_time = 0.0
+
         self.logger.info(
             "PriceAdapter initialized",
             source=self.source.value,
             cache_dir=str(self.cache.cache_dir),
             cache_ttl=self.cache.ttl_seconds,
+            request_delay_sec=self._request_delay,
         )
+
+    def _rate_limit(self) -> None:
+        """Apply rate limiting delay between API requests."""
+        current_time = time.time()
+        time_since_last_request = current_time - self._last_request_time
+
+        if time_since_last_request < self._request_delay:
+            sleep_time = self._request_delay - time_since_last_request
+            time.sleep(sleep_time)
+
+        self._last_request_time = time.time()
 
     def get_universe(
         self, min_market_cap: float | None = None, min_volume: int | None = None
     ) -> list[str]:
         """Get list of tickers to scan.
 
-        For MVP, returns a curated list of liquid US stocks.
-        In future versions, this could be expanded to:
-        - Load from CSV file
-        - Query from database
-        - Filter by market cap, volume, sector
-        - Include international stocks
+        Fetches tickers dynamically from S&P 500 and NASDAQ-100 indices.
+        Falls back to DEFAULT_UNIVERSE if fetching fails.
+        Results are cached for 24 hours.
 
         Args:
             min_market_cap: Minimum market cap filter (not implemented in MVP)
             min_volume: Minimum volume filter (not implemented in MVP)
 
         Returns:
-            List of ticker symbols
+            List of ticker symbols (typically 600+ tickers from S&P 500 + NASDAQ-100)
 
         Example:
             >>> adapter = PriceAdapter()
             >>> tickers = adapter.get_universe()
-            >>> len(tickers) > 20
+            >>> len(tickers) > 500
             True
         """
+        # Check cache first (24 hour TTL for universe)
+        cache_key = "ticker_universe"
+        cached = self.cache.get(cache_key)
+        if cached is not None:
+            self.logger.info(
+                "Using cached ticker universe",
+                universe_size=len(cached),
+            )
+            return list(cached)  # Ensure return type is list[str]
+
+        # Fetch from S&P 500 and NASDAQ-100
+        self.logger.info("Fetching ticker universe from S&P 500 and NASDAQ-100")
+
+        sp500 = _fetch_sp500_tickers()
+        nasdaq100 = _fetch_nasdaq100_tickers()
+
+        # Combine and deduplicate
+        universe = list(set(sp500 + nasdaq100))
+
+        # If fetching failed, fall back to default universe
+        if not universe:
+            self.logger.warning("Failed to fetch dynamic universe, using DEFAULT_UNIVERSE")
+            universe = DEFAULT_UNIVERSE.copy()
+        else:
+            # Sort for consistency
+            universe.sort()
+
         self.logger.info(
-            "Getting ticker universe",
+            "Ticker universe loaded",
             min_market_cap=min_market_cap,
             min_volume=min_volume,
-            universe_size=len(DEFAULT_UNIVERSE),
+            universe_size=len(universe),
+            source="S&P500+NASDAQ100" if universe != DEFAULT_UNIVERSE else "DEFAULT",
         )
 
-        # For MVP, return default universe
+        # Cache for 24 hours
+        self.cache.set(cache_key, universe, ttl_seconds=86400)
+
         # TODO: Implement filtering by market cap and volume
-        return DEFAULT_UNIVERSE.copy()
+        return universe
 
     def get_bars(
         self,
@@ -207,6 +312,9 @@ class PriceAdapter(BaseDataAdapter):
         self.logger.info("Fetching bars", ticker=ticker, window=window, interval=interval)
 
         try:
+            # Apply rate limiting
+            self._rate_limit()
+
             # Download data with yfinance
             stock = yf.Ticker(ticker)
             end_date = datetime.now()
@@ -317,6 +425,9 @@ class PriceAdapter(BaseDataAdapter):
         self.logger.info("Fetching latest price", ticker=ticker)
 
         try:
+            # Apply rate limiting
+            self._rate_limit()
+
             stock = yf.Ticker(ticker)
             info = stock.info
 
@@ -407,6 +518,9 @@ class PriceAdapter(BaseDataAdapter):
         self.logger.info("Fetching ticker info", ticker=ticker)
 
         try:
+            # Apply rate limiting before API call
+            self._rate_limit()
+
             stock = yf.Ticker(ticker)
             info = stock.info
 

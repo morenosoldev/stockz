@@ -1,22 +1,24 @@
-"""SQLAlchemy database models for Recover-Bot.
+"""SQLAlchemy models for database schema.
 
-All models follow these conventions:
-- Use UUID primary keys for traceability
-- Include created_at/updated_at timestamps
-- Use JSONB for flexible structured data
-- Add proper indexes for query performance
-- Follow naming: singular for table names (ticker, not tickers)
+Core principles:
+- UUID primary keys for distributed systems
+- Explicit versioning for reproducibility
+- Use JSONB/JSON for flexible structured data
+- Foreign key constraints for referential integrity
+- Indexes for common query patterns
 """
 
 import uuid
+from enum import Enum
+from typing import Any
 
 from sqlalchemy import (
+    JSON,
     BigInteger,
     Boolean,
     Column,
     Date,
     DateTime,
-    Enum,
     ForeignKey,
     Index,
     Integer,
@@ -29,6 +31,12 @@ from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
 from src.storage.database import Base
+
+
+# Use JSONB for PostgreSQL, JSON for other databases (e.g., SQLite in tests)
+def JSONType() -> JSON:
+    """Return appropriate JSON type for the database dialect."""
+    return JSON().with_variant(JSONB(), "postgresql")  # type: ignore[no-untyped-call]
 
 
 class Ticker(Base):
@@ -100,11 +108,11 @@ class Run(Base):
     errors_count = Column(Integer, default=0, nullable=False, doc="Number of errors encountered")
 
     # Metadata
-    config_snapshot = Column(
-        JSONB, nullable=True, doc="Snapshot of config used for this run (reproducibility)"
+    config_snapshot: Any = Column(
+        JSONType(), nullable=True, doc="Snapshot of config used for this run (reproducibility)"
     )
-    error_details = Column(
-        JSONB, nullable=True, doc="Structured error information if status=failed"
+    error_details: Any = Column(
+        JSONType(), nullable=True, doc="Structured error information if status=failed"
     )
 
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
@@ -149,15 +157,15 @@ class Feature(Base):
     )
 
     # Feature data (flexible JSONB)
-    features = Column(
-        JSONB,
+    features: Any = Column(
+        JSONType(),
         nullable=False,
         doc="Feature dictionary (e.g., {'atr_14': 2.5, 'rsi_14': 35.2})",
     )
 
     # Attribution
-    attribution = Column(
-        JSONB,
+    attribution: Any = Column(
+        JSONType(),
         nullable=False,
         doc="Data source attribution (source, timestamp, url, api_endpoint)",
     )
@@ -213,15 +221,15 @@ class Candidate(Base):
     volume_rvol = Column(Numeric(6, 2), nullable=True, doc="Relative volume (vs avg)")
 
     # Explainability
-    rationale = Column(
-        JSONB,
+    rationale: Any = Column(
+        JSONType(),
         nullable=False,
         doc="Score rationale (rules triggered, confidence factors, etc.)",
     )
 
     # Attribution
-    attribution = Column(
-        JSONB,
+    attribution: Any = Column(
+        JSONType(),
         nullable=False,
         doc="Data source attribution for all data used in scoring",
     )
@@ -289,8 +297,8 @@ class EvalOutcome(Base):
     labeling_version = Column(
         String(20), nullable=False, doc="Labeling logic version for reproducibility"
     )
-    outcome_data = Column(
-        JSONB, nullable=True, doc="Raw outcome data (prices, volumes, etc.) for auditing"
+    outcome_data: Any = Column(
+        JSONType(), nullable=True, doc="Raw outcome data (prices, volumes, etc.) for auditing"
     )
 
     # Relationships

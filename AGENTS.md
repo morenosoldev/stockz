@@ -835,13 +835,43 @@ CACHE_TTL_SECONDS=3600
 
 ## Troubleshooting
 
+### Docker Daemon Issues (Dev Container)
+```bash
+# If Docker commands fail with "Cannot connect to the Docker daemon" error:
+
+# 1. Check if dockerd process is running
+ps aux | grep dockerd
+
+# 2. If running but connection fails, restart dockerd with explicit socket
+sudo pkill dockerd
+sleep 2
+sudo /usr/bin/dockerd -H unix:///var/run/docker.sock > /tmp/dockerd.log 2>&1 &
+sleep 5
+docker ps  # Should work now
+
+# 3. If still fails, check socket permissions
+sudo chmod 666 /var/run/docker.sock
+
+# 4. Verify Docker is working
+docker version
+docker ps
+
+# Note: In dev containers, the Docker daemon can sometimes lose its socket connection
+# after container restarts. The above steps will re-establish the connection.
+```
+
 ### Database Connection Issues
 ```bash
 # Check if PostgreSQL is running
-docker-compose ps
+docker compose ps postgres
+
+# If container exists but stopped, start it
+docker compose up -d postgres
+
+# If image pull fails, ensure Docker daemon is running (see above)
 
 # View PostgreSQL logs
-docker-compose logs postgres
+docker compose logs postgres
 
 # Reset database
 make db-reset

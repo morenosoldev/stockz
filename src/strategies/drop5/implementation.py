@@ -89,6 +89,9 @@ class Drop5Strategy(BaseStrategy):
         sma_distance = ((current["close"] - sma_20) / sma_20) * 100
 
         return {
+            "price": ticker_data.get("price", current["close"]),  # Current price
+            "sector": ticker_data.get("sector"),  # Sector
+            "market_cap": ticker_data.get("market_cap", 0),  # Market cap
             "drop_pct": drop_pct,
             "rsi": indicators.get("rsi", 50.0),
             "volume_ratio": volume_ratio,

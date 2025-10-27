@@ -1,28 +1,44 @@
 """
-Structured logging configuration for Recover-Bot.
+Structured logging utilities with real-time SSE streaming support.
 
-Provides JSON-formatted structured logging with:
-- Contextual information (request_id, user, run_id, etc.)
-- Multiple output handlers (console, file, rotation)
-- Log level configuration
-- Exception logging with stack traces
-- Integration with FastAPI and APScheduler
+Provides structured logging with JSON output, contextual fields,
+and real-time streaming to Server-Sent Events (SSE) endpoints.
 """
 
+import asyncio
 import logging
 import logging.handlers
 import sys
+from collections import defaultdict
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from uuid import UUID
 
 import structlog
 from structlog.types import EventDict, Processor
 
 from src.ops.config import get_config
 
-# Global logger cache
+# Global logger cache to avoid repeated logger creation
 _logger_cache: dict[str, structlog.BoundLogger] = {}
+
+# Global async queues for SSE streaming (one queue per run_id)
+_log_queues: dict[str, asyncio.Queue[dict[str, Any]]] = defaultdict(
+    lambda: asyncio.Queue(maxsize=1000)
+)
+
+# In-memory stats tracker for real-time updates (no database!)
+_scan_stats: dict[str, dict[str, Any]] = defaultdict(
+    lambda: {
+        "tickers_processed": 0,
+        "candidates_found": 0,
+        "errors": 0,
+        "start_time": None,
+        "status": "running",
+    }
+)
 
 
 def add_timestamp(logger: Any, method_name: str, event_dict: EventDict) -> EventDict:
@@ -41,6 +57,29 @@ def add_logger_name(logger: Any, method_name: str, event_dict: EventDict) -> Eve
     """Add logger name to event dict."""
     if hasattr(logger, "name"):
         event_dict["logger"] = logger.name
+    return event_dict
+
+
+def extract_run_id_to_record(logger: Any, method_name: str, event_dict: EventDict) -> EventDict:
+    """Extract run_id and other fields from event_dict and attach to log record for StreamingLogHandler."""
+    # Get the current log record being processed
+    record = event_dict.get("_record")
+    if record:
+        # Attach run_id as record attribute so StreamingLogHandler can find it
+        if "run_id" in event_dict:
+            record.run_id = event_dict["run_id"]
+        # Also check in 'extra' dict
+        elif "extra" in event_dict and isinstance(event_dict["extra"], dict):
+            if "run_id" in event_dict["extra"]:
+                record.run_id = event_dict["extra"]["run_id"]
+
+        # Also attach other streaming-relevant fields
+        for field in ["ticker", "price", "strategy", "score", "event"]:
+            if field in event_dict:
+                setattr(record, field, event_dict[field])
+            elif "extra" in event_dict and isinstance(event_dict["extra"], dict):
+                if field in event_dict["extra"]:
+                    setattr(record, field, event_dict["extra"][field])
     return event_dict
 
 
@@ -69,6 +108,75 @@ def setup_logging(
     log_path = Path(log_dir)
     log_path.mkdir(exist_ok=True)
 
+    # Define SSE streaming processor
+    def sse_stream_processor(logger: Any, method_name: str, event_dict: EventDict) -> EventDict:
+        """Stream logs with run_id to SSE queues in REAL-TIME."""
+        run_id = event_dict.get("run_id")
+        if run_id:
+            run_id_str = str(run_id)
+
+            # Initialize stats if this is the first log
+            if _scan_stats[run_id_str]["start_time"] is None:
+                _scan_stats[run_id_str]["start_time"] = datetime.now(UTC)
+
+            # Update stats based on log content
+            message = event_dict.get("event", "")
+
+            # Increment processed count when we process ANY ticker (scored, passed, or skipped)
+            if "ticker" in event_dict:
+                ticker = event_dict.get("ticker", "")
+                # Only count if this is a ticker being processed (not just a status message)
+                if ticker and any(
+                    keyword in message for keyword in ["Score", "Passed", "Skipped", "Error"]
+                ):
+                    _scan_stats[run_id_str]["tickers_processed"] += 1
+
+                # Increment candidates when we find a high score
+                if "Score" in message and event_dict.get("score"):
+                    _scan_stats[run_id_str]["candidates_found"] += 1
+
+                # Increment errors
+                if "Error" in message or "⚠️" in message:
+                    _scan_stats[run_id_str]["errors"] += 1
+
+            # Capture the beautifully formatted message from 'event' field
+            log_entry = {
+                "timestamp": event_dict.get("timestamp", datetime.now(UTC).isoformat()),
+                "level": event_dict.get("level", method_name).lower(),
+                "message": message,
+                "event": message,
+                "logger": event_dict.get("logger", ""),
+            }
+
+            # Add all extra fields
+            for field in [
+                "ticker",
+                "price",
+                "strategy",
+                "score",
+                "sector",
+                "market_cap",
+                "drop_pct",
+                "rsi",
+                "error",
+                "skip_reason",
+            ]:
+                if field in event_dict:
+                    log_entry[field] = event_dict[field]
+
+            # Push to queue immediately (non-blocking)
+            queue = _log_queues[run_id_str]
+            try:
+                queue.put_nowait(log_entry)
+            except asyncio.QueueFull:
+                # Queue is full, drop oldest log (shouldn't happen with 1000 size)
+                try:
+                    queue.get_nowait()
+                    queue.put_nowait(log_entry)
+                except Exception:
+                    pass  # If still fails, just skip this log
+        return event_dict
+
     # Configure structlog processors
     processors: list[Processor] = [
         structlog.contextvars.merge_contextvars,
@@ -76,6 +184,8 @@ def setup_logging(
         structlog.stdlib.add_logger_name,
         add_timestamp,
         add_log_level,
+        sse_stream_processor,  # Directly stream logs to SSE queue
+        extract_run_id_to_record,  # For legacy StreamingLogHandler
         structlog.stdlib.PositionalArgumentsFormatter(),
         structlog.processors.StackInfoRenderer(),
         structlog.processors.format_exc_info,
@@ -234,3 +344,83 @@ try:
 except Exception:
     # Silently fail - user can call init_logging() or setup_logging() manually
     pass
+
+
+# ============================================================================
+# Log Streaming / Aggregator for SSE
+# ============================================================================
+
+
+async def stream_logs(run_id: str | UUID) -> AsyncIterator[dict[str, Any]]:
+    """
+    Stream logs for a specific run ID in REAL-TIME from async queue.
+
+    Args:
+        run_id: UUID of the scan run
+
+    Yields:
+        dict: Log entry with timestamp, level, message, etc.
+    """
+    run_id_str = str(run_id)
+    queue = _log_queues[run_id_str]
+
+    try:
+        while True:
+            # Wait for next log entry (blocks until available)
+            # Use timeout to periodically check if scan is still running
+            try:
+                log_entry = await asyncio.wait_for(queue.get(), timeout=1.0)
+                yield log_entry
+            except TimeoutError:
+                # No logs in last second, continue waiting
+                continue
+
+    except asyncio.CancelledError:
+        # Client disconnected
+        pass
+    finally:
+        # Cleanup queue when stream ends
+        if run_id_str in _log_queues and queue.empty():
+            del _log_queues[run_id_str]
+
+
+def clear_logs(run_id: str | UUID) -> None:
+    """Clear logs for a specific run to free memory."""
+    run_id_str = str(run_id)
+    if run_id_str in _log_queues:
+        del _log_queues[run_id_str]
+    if run_id_str in _scan_stats:
+        del _scan_stats[run_id_str]
+
+
+def get_scan_stats(run_id: str | UUID) -> dict[str, Any]:
+    """
+    Get real-time in-memory stats for a scan run.
+
+    Args:
+        run_id: UUID of the scan run
+
+    Returns:
+        dict with tickers_processed, candidates_found, errors, duration_seconds, status
+    """
+    run_id_str = str(run_id)
+    stats = _scan_stats[run_id_str]
+
+    # Calculate duration
+    duration_seconds = 0
+    if stats["start_time"]:
+        duration_seconds = int((datetime.now(UTC) - stats["start_time"]).total_seconds())
+
+    return {
+        "tickers_processed": stats["tickers_processed"],
+        "candidates_found": stats["candidates_found"],
+        "errors": stats["errors"],
+        "duration_seconds": duration_seconds,
+        "status": stats["status"],
+    }
+
+
+def update_scan_status(run_id: str | UUID, status: str) -> None:
+    """Update the status of a scan run in memory."""
+    run_id_str = str(run_id)
+    _scan_stats[run_id_str]["status"] = status

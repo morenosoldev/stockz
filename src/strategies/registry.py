@@ -12,7 +12,7 @@ Example:
     drop5
 """
 
-from typing import Any
+from typing import Any, Literal, overload
 
 from src.ops.logging import get_logger
 from src.strategies.base import StrategyProtocol
@@ -179,6 +179,16 @@ class StrategyRegistry:
             ...     strategy = registry.get("drop5")
         """
         return strategy_name in self._strategies
+
+    @overload
+    def list_strategies(
+        self, enabled_only: bool = ..., *, names_only: Literal[True]
+    ) -> list[str]: ...
+
+    @overload
+    def list_strategies(
+        self, enabled_only: bool = ..., *, names_only: Literal[False] = ...
+    ) -> list[StrategyProtocol]: ...
 
     def list_strategies(
         self, enabled_only: bool = False, names_only: bool = False

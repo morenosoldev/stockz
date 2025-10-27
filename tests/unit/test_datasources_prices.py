@@ -68,9 +68,11 @@ class TestGetUniverse:
         assert universe1 is not universe2
 
     def test_universe_size_matches_default(self, adapter):
-        """Test universe size matches DEFAULT_UNIVERSE."""
+        """Test universe fetches S&P 500 tickers or falls back to DEFAULT_UNIVERSE."""
         universe = adapter.get_universe()
-        assert len(universe) == len(DEFAULT_UNIVERSE)
+        # Should fetch S&P 500 (~500 tickers) or fall back to DEFAULT_UNIVERSE (28 tickers)
+        assert len(universe) >= len(DEFAULT_UNIVERSE)
+        assert len(universe) > 0
 
 
 class TestGetBars:

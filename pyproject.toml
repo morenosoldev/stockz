@@ -122,13 +122,56 @@ warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true
 disallow_any_generics = false
-ignore_missing_imports = true
+ignore_missing_imports = false
+plugins = ["pydantic.mypy"]
 exclude = [
     "migrations/",
     ".venv/",
     "build/",
     "dist/",
 ]
+
+# SQLAlchemy stubs configuration
+[[tool.mypy.overrides]]
+module = "sqlalchemy.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "alembic.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "yfinance.*"
+ignore_missing_imports = true
+
+# SQLAlchemy 2.0 DeclarativeBase type issues
+[[tool.mypy.overrides]]
+module = "src.storage.database"
+disable_error_code = ["attr-defined", "misc"]
+
+[[tool.mypy.overrides]]
+module = "src.storage.models"
+warn_return_any = false
+
+# FastAPI route decorators are not fully typed
+[[tool.mypy.overrides]]
+module = "src.api.routes.*"
+disable_error_code = ["misc"]
+
+[[tool.mypy.overrides]]
+module = "src.api.main"
+disable_error_code = ["misc"]
+
+# Relax strict typing for data processing modules with pandas
+[[tool.mypy.overrides]]
+module = "src.features.*"
+warn_return_any = false
+disallow_untyped_defs = false
+disable_error_code = ["call-overload", "operator"]
+
+[[tool.mypy.overrides]]
+module = "src.datasources.prices"
+warn_return_any = false
 
 [[tool.mypy.overrides]]
 module = "tests.*"
@@ -147,6 +190,10 @@ addopts = [
 testpaths = ["tests"]
 pythonpath = ["."]
 asyncio_mode = "auto"
+markers = [
+    "integration: Integration tests that may use real external services",
+    "slow: Tests that take longer to run (benchmarks, etc.)",
+]
 
 [tool.coverage.run]
 source = ["src"]

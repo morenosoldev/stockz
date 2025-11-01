@@ -9,6 +9,8 @@ from collections.abc import Generator
 from sqlalchemy import create_engine
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
+from src.ops.config import get_config
+
 
 # SQLAlchemy 2.0 declarative base
 class Base(DeclarativeBase):
@@ -17,16 +19,18 @@ class Base(DeclarativeBase):
     pass
 
 
-# Database configuration (will be replaced with config in Task 1.5)
-DATABASE_URL = "postgresql://recoverbot:recoverbot@localhost:5432/recoverbot"
+# Load database configuration from config/env
+config = get_config()
 
 # Create engine with connection pooling
 engine = create_engine(
-    DATABASE_URL,
-    pool_size=10,  # Max 10 connections in pool
-    max_overflow=20,  # Allow up to 20 overflow connections
+    config.database.url,
+    pool_size=config.database.pool_size,
+    max_overflow=config.database.max_overflow,
+    pool_timeout=config.database.pool_timeout,
+    pool_recycle=config.database.pool_recycle,
     pool_pre_ping=True,  # Verify connections before using
-    echo=False,  # Set to True for SQL query logging
+    echo=config.database.echo,
 )
 
 # Session factory

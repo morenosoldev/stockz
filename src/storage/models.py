@@ -76,6 +76,7 @@ class RunStatus(str, Enum):
     RUNNING = "running"
     COMPLETED = "completed"
     FAILED = "failed"
+    STOPPED = "stopped"  # User-initiated interruption
 
 
 class Run(Base):

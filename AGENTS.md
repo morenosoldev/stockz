@@ -10,6 +10,7 @@
 ## Quick Reference
 
 ### Essential Commands
+
 ```bash
 # Setup
 make install                 # Install all dependencies
@@ -40,6 +41,7 @@ make clean                   # Clean temporary files
 The project includes full VS Code integration for one-click development. All configuration files are in `.vscode/`:
 
 **One-Click Launch** (Press **F5**):
+
 - Automatically starts PostgreSQL container
 - Runs database migrations
 - Launches FastAPI with debugger attached
@@ -49,6 +51,7 @@ The project includes full VS Code integration for one-click development. All con
 - Swagger docs at http://localhost:8000/docs
 
 **Keyboard Shortcuts**:
+
 - **F5** - Start Debugging (Full Stack)
 - **Shift+F5** - Stop Debugging
 - **Ctrl+Shift+F5** - Restart Debugging
@@ -57,6 +60,7 @@ The project includes full VS Code integration for one-click development. All con
 - **Ctrl+Shift+P** → "Tasks: Run Task" - Show all available tasks
 
 **Available Tasks** (Terminal > Run Task or Ctrl+Shift+P):
+
 ```
 Database Management:
 - Start PostgreSQL       - Launch postgres:15 container
@@ -79,6 +83,7 @@ Operations:
 ```
 
 **Debug Configurations** (.vscode/launch.json):
+
 1. **🚀 Full Stack (F5)** - Compound configuration (recommended)
    - Pre-launch task: Start Full Stack (DB + migrations)
    - Launches FastAPI with debugger
@@ -90,38 +95,15 @@ Operations:
 6. **Debug Backfill** - Debug backfill script
 
 **Settings** (.vscode/settings.json):
+
 - **Formatting**: Black (line-length: 100), format-on-save enabled
 - **Linting**: Ruff (fast Python linter) + Mypy (type checker)
 - **Testing**: Pytest with auto-discovery in `tests/`
 - **Python Interpreter**: Uses workspace venv if available
 - **Editor**: Rulers at 100 chars, trim trailing whitespace
 
-**Recommended Extensions** (.vscode/extensions.json):
-The first time you open the project, VS Code will prompt to install recommended extensions:
-- `ms-python.python` - Python language support
-- `ms-python.vscode-pylance` - Fast Python language server
-- `charliermarsh.ruff` - Ruff linter integration
-- `mtxr.sqltools` + `mtxr.sqltools-driver-pg` - PostgreSQL GUI
-- `ms-azuretools.vscode-docker` - Docker management
-- `tamasfe.even-better-toml` - TOML syntax support
-- `redhat.vscode-yaml` - YAML syntax support
-- `github.copilot` - AI pair programmer
-- `eamodio.gitlens` - Git supercharged
-- `ms-vscode.makefile-tools` - Makefile support
-- `ms-python.debugpy` - Python debugger (required for debugging)
-- `donjayamanne.python-extension-pack` - Python tools bundle
-
-**Debugging Workflow**:
-1. Set breakpoints in your code (click left gutter in editor)
-2. Press **F5** to start debugging
-3. Wait for "Starting PostgreSQL..." → "Running migrations..." → "Debugger attached"
-4. Make API requests (curl, Postman, or Swagger UI)
-5. Debugger pauses at breakpoints
-6. Use Debug Console to inspect variables, run expressions
-7. Step through code with F10 (over), F11 (into), Shift+F11 (out)
-8. Press Shift+F5 to stop
-
 **Tips**:
+
 - Use **"Start Dev Server"** task for development without debugging (faster startup)
 - Use **"Run Tests with Coverage"** to see coverage report in `htmlcov/index.html`
 - SQLTools extension lets you browse database schema and run queries
@@ -132,6 +114,7 @@ The first time you open the project, VS Code will prompt to install recommended 
 **IMPORTANT**: This workspace has the **Context7 MCP server** (Upstash) enabled for retrieving up-to-date library documentation.
 
 **When to Use Context7:**
+
 - Need current documentation for FastAPI, SQLAlchemy, Alembic, Pydantic, etc.
 - Implementing features with libraries you're less familiar with
 - Want to verify API signatures or best practices
@@ -139,7 +122,9 @@ The first time you open the project, VS Code will prompt to install recommended 
 - Checking for breaking changes or new features in dependencies
 
 **How to Use:**
+
 1. **First**, resolve the library ID:
+
    ```
    Use mcp_upstash_conte_resolve-library-id with libraryName="fastapi"
    Returns: Context7-compatible ID like "/fastapi/fastapi"
@@ -154,6 +139,7 @@ The first time you open the project, VS Code will prompt to install recommended 
    ```
 
 **Supported Libraries in This Project:**
+
 - FastAPI - `/fastapi/fastapi` or `/tiangolo/fastapi`
 - SQLAlchemy - `/sqlalchemy/sqlalchemy`
 - Alembic - `/sqlalchemy/alembic`
@@ -163,6 +149,7 @@ The first time you open the project, VS Code will prompt to install recommended 
 - And many more Python libraries
 
 **Best Practices:**
+
 - Use Context7 **before** implementing unfamiliar features
 - Resolve library ID once, then reuse for multiple doc queries
 - Specify `topic` parameter to get focused, relevant documentation
@@ -170,6 +157,7 @@ The first time you open the project, VS Code will prompt to install recommended 
 - Combine with code examples from docs for better results
 
 **Example Workflow:**
+
 ```
 User: "Implement FastAPI background tasks for scanning"
 Agent:
@@ -180,6 +168,7 @@ Agent:
 ```
 
 ### Project Documentation
+
 - **CONSTITUTION.md** - Project principles (facts-first, reproducibility, safety, etc.)
 - **SPECIFICATION.md** - Requirements, scope, and success metrics
 - **PLAN.md** - Technical architecture and design decisions
@@ -191,9 +180,11 @@ Agent:
 ## Project Overview
 
 ### What is Recover-Bot?
+
 A backend service that scans equity markets to identify "drop events" with high recovery probability using pluggable strategy modules. **NO TRADING in v1** - read-only analysis with shadow-mode evaluation.
 
 ### Core Principles (from CONSTITUTION.md)
+
 1. **Facts-First Data**: All data must be attributed; LLMs only summarize, never invent
 2. **Reproducibility**: Versioned data snapshots, features, and models
 3. **Safety**: Read-only mode, no order placement
@@ -203,6 +194,7 @@ A backend service that scans equity markets to identify "drop events" with high 
 7. **Simplicity First**: Rules-based MVP, ML comes later
 
 ### Tech Stack
+
 - **Language**: Python 3.11+
 - **Framework**: FastAPI (async web framework)
 - **Database**: PostgreSQL 15+ with SQLAlchemy 2.0 ORM
@@ -333,6 +325,7 @@ A backend service that scans equity markets to identify "drop events" with high 
 ## Coding Conventions
 
 ### Python Style
+
 - **Formatter**: Black (line length: 100)
 - **Linter**: Ruff (extends flake8, pylint)
 - **Type Checker**: Mypy with strict mode
@@ -340,6 +333,7 @@ A backend service that scans equity markets to identify "drop events" with high 
 - **Docstrings**: Google style
 
 ### Naming Conventions
+
 ```python
 # Files & Modules
 file_name.py                 # Snake case
@@ -362,7 +356,9 @@ def _internal_helper():      # Leading underscore
 ```
 
 ### Type Hints
+
 **Always use type hints** for function signatures:
+
 ```python
 from typing import Dict, List, Optional, Any
 from datetime import date, datetime
@@ -377,6 +373,7 @@ def get_bars(
 ```
 
 ### Error Handling
+
 ```python
 # Use specific exceptions
 from src.ops.errors import DataSourceError, ConfigurationError
@@ -400,6 +397,7 @@ def fetch_remote_data():
 ```
 
 ### Logging
+
 ```python
 from src.ops.logging import get_logger
 
@@ -425,6 +423,7 @@ logger.critical("Critical failures")
 ```
 
 ### Database Operations
+
 ```python
 from src.storage.database import get_db
 from src.storage.models import Candidate
@@ -445,6 +444,7 @@ with SessionLocal() as session:
 ```
 
 ### Configuration Access
+
 ```python
 from src.ops.config import get_config
 
@@ -461,7 +461,9 @@ api_key = config.datasources.prices.api_key
 ## Key Interfaces & Contracts
 
 ### Strategy Interface
+
 Every strategy must implement `StrategyProtocol`:
+
 ```python
 from typing import Protocol, Dict, Any
 
@@ -500,7 +502,9 @@ class StrategyProtocol(Protocol):
 ```
 
 ### Data Attribution
+
 Every data point must include attribution:
+
 ```python
 from dataclasses import dataclass
 from datetime import datetime
@@ -521,6 +525,7 @@ class Attribution:
 ```
 
 ### Data Adapter Interface
+
 ```python
 from typing import Protocol
 
@@ -541,6 +546,7 @@ class DataAdapterProtocol(Protocol):
 ## Database Schema
 
 ### Core Tables
+
 ```sql
 -- Ticker universe
 CREATE TABLE ticker (
@@ -602,12 +608,14 @@ CREATE TABLE eval_outcome (
 ### Adding a New Strategy
 
 1. **Create strategy folder**:
+
 ```bash
 mkdir -p src/strategies/my_strategy
 cd src/strategies/my_strategy
 ```
 
 2. **Create `implementation.py`**:
+
 ```python
 from typing import Dict, Any
 from ..base import StrategyProtocol
@@ -634,6 +642,7 @@ class MyStrategy:
 ```
 
 3. **Create `config.yml`**:
+
 ```yaml
 name: my_strategy
 version: 1.0.0
@@ -651,6 +660,7 @@ enabled: true
 ### Running a Scan
 
 **Via API**:
+
 ```bash
 # Trigger scan
 curl -X POST http://localhost:8000/v1/scan \
@@ -662,11 +672,13 @@ curl "http://localhost:8000/v1/candidates?date=2025-10-24&strategy=drop5"
 ```
 
 **Via Script**:
+
 ```bash
 python scripts/one_shot_scan.py --date 2025-10-24 --strategy drop5
 ```
 
 **Via Makefile**:
+
 ```bash
 make scan
 ```
@@ -674,6 +686,7 @@ make scan
 ### Database Migrations
 
 **Create new migration**:
+
 ```bash
 # Auto-generate from model changes
 alembic revision --autogenerate -m "add new column"
@@ -683,6 +696,7 @@ alembic revision -m "custom migration"
 ```
 
 **Apply migrations**:
+
 ```bash
 alembic upgrade head      # Upgrade to latest
 alembic upgrade +1        # Upgrade one version
@@ -691,6 +705,7 @@ alembic downgrade base    # Downgrade to empty DB
 ```
 
 **Check migration status**:
+
 ```bash
 alembic current           # Show current version
 alembic history           # Show all migrations
@@ -699,22 +714,26 @@ alembic history           # Show all migrations
 ### Testing
 
 **Run all tests**:
+
 ```bash
 make test
 ```
 
 **Run specific test**:
+
 ```bash
 pytest tests/unit/test_features.py::test_calculate_atr -v
 ```
 
 **Run with coverage**:
+
 ```bash
 make test-cov
 # Coverage report in htmlcov/index.html
 ```
 
 **Test a strategy**:
+
 ```bash
 pytest tests/strategies/test_drop5.py -v
 ```
@@ -724,12 +743,14 @@ pytest tests/strategies/test_drop5.py -v
 ## API Endpoints Reference
 
 ### Health Check
+
 ```
 GET /health
 Response: {"status": "healthy", "database": "connected", "timestamp": "..."}
 ```
 
 ### Trigger Scan
+
 ```
 POST /v1/scan
 Body: {
@@ -741,6 +762,7 @@ Response: {"run_id": "uuid", "status": "queued"}
 ```
 
 ### List Candidates
+
 ```
 GET /v1/candidates?date=2025-10-24&strategy=drop5&min_score=0.5
 Response: {
@@ -759,6 +781,7 @@ Response: {
 ```
 
 ### Candidate Detail
+
 ```
 GET /v1/candidate/AAPL/2025-10-24?strategy=drop5
 Response: {
@@ -776,6 +799,7 @@ Response: {
 ```
 
 ### Run Metadata
+
 ```
 GET /v1/runs/2025-10-24
 Response: {
@@ -791,6 +815,7 @@ Response: {
 ```
 
 ### Metrics
+
 ```
 GET /v1/metrics?start_date=2025-10-01&end_date=2025-10-24&strategy=drop5
 Response: {
@@ -836,6 +861,7 @@ CACHE_TTL_SECONDS=3600
 ## Troubleshooting
 
 ### Docker Daemon Issues (Dev Container)
+
 ```bash
 # If Docker commands fail with "Cannot connect to the Docker daemon" error:
 
@@ -861,6 +887,7 @@ docker ps
 ```
 
 ### Database Connection Issues
+
 ```bash
 # Check if PostgreSQL is running
 docker compose ps postgres
@@ -881,6 +908,7 @@ make db-migrate
 ```
 
 ### Import Errors
+
 ```bash
 # Reinstall dependencies
 make install
@@ -890,6 +918,7 @@ python -c "import sys; print('\n'.join(sys.path))"
 ```
 
 ### Strategy Not Loading
+
 ```bash
 # Check strategy folder structure
 ls -la src/strategies/my_strategy/
@@ -901,6 +930,7 @@ grep "strategy" logs/app.log
 ```
 
 ### Scan Timeout
+
 ```bash
 # Increase timeout in config/config.yaml
 scanner:
@@ -918,6 +948,7 @@ scanner:
 When implementing a task:
 
 1. **Read the relevant docs first**:
+
    - CONSTITUTION.md for principles
    - SPECIFICATION.md for requirements
    - PLAN.md for architecture
@@ -925,6 +956,7 @@ When implementing a task:
    - AGENTS.md (this file) for coding conventions and workflows
 
 2. **Follow the coding conventions** above:
+
    - Python style (Black, Ruff, Mypy)
    - Naming conventions
    - Type hints
@@ -932,17 +964,20 @@ When implementing a task:
    - Logging standards
 
 3. **Write tests alongside implementation**:
+
    - Unit tests in `tests/unit/`
    - Integration tests in `tests/integration/`
    - Follow existing test patterns
    - Aim for >80% code coverage
 
 4. **Add proper logging**:
+
    - Use structured logging with context
    - Log at appropriate levels
    - Include relevant metadata
 
 5. **Update documentation**:
+
    - Add docstrings to all functions/classes (Google style)
    - Update relevant docs/ files
    - Add usage examples
@@ -957,6 +992,7 @@ When implementing a task:
      - Change database schema → Update "Database Schema" section
 
 6. **Validate your work**:
+
    - Run `make format` to format code
    - Run `make lint` (must pass with no errors)
    - Run `make test` (must pass all tests)
@@ -964,6 +1000,7 @@ When implementing a task:
    - Verify examples in AGENTS.md still work
 
 7. **Attribution & reproducibility**:
+
    - Always include data attribution
    - Version all features/models
    - Make operations deterministic
@@ -983,6 +1020,7 @@ When implementing a task:
 ## Performance Considerations
 
 ### Scanning Performance
+
 - **Target**: <10 minutes for 1,500 tickers
 - **Optimization strategies**:
   - Cache aggressively (3600s TTL)
@@ -993,12 +1031,14 @@ When implementing a task:
   - Use database indexes effectively
 
 ### Database Performance
+
 - **Always use indexes** for common queries
 - **Batch inserts** when possible (use `bulk_insert_mappings`)
 - **Avoid N+1 queries** (use `joinedload`)
 - **Use EXPLAIN ANALYZE** for slow queries
 
 ### Memory Management
+
 - **Stream large datasets** instead of loading all at once
 - **Clear caches** periodically
 - **Use generators** for large result sets
@@ -1009,6 +1049,7 @@ When implementing a task:
 ## Git Workflow
 
 ### Branch Naming
+
 ```
 feature/task-1.1-project-setup
 fix/scanner-timeout
@@ -1017,6 +1058,7 @@ test/strategy-unit-tests
 ```
 
 ### Commit Messages
+
 ```
 feat: implement price data adapter with caching
 
@@ -1029,6 +1071,7 @@ Closes #123
 ```
 
 ### Before Committing
+
 ```bash
 make format      # Format code
 make lint        # Run linters
@@ -1042,11 +1085,13 @@ make test        # Run tests
 To start working on this project:
 
 1. **Read the context**:
+
    ```bash
    cat CONSTITUTION.md SPECIFICATION.md PLAN.md
    ```
 
 2. **Setup environment**:
+
    ```bash
    make install
    make db-up
@@ -1054,6 +1099,7 @@ To start working on this project:
    ```
 
 3. **Check current state**:
+
    ```bash
    # Review what's implemented
    tree src/
@@ -1063,11 +1109,13 @@ To start working on this project:
    ```
 
 4. **Pick a task from TASKS.md**:
+
    - Start with Phase 1 tasks if nothing is done
    - Check dependencies before starting
    - Read task acceptance criteria carefully
 
 5. **Implement with TDD**:
+
    - Write tests first
    - Implement code
    - Run tests
@@ -1083,6 +1131,7 @@ To start working on this project:
 ## Additional Resources
 
 ### External Documentation
+
 - **FastAPI**: https://fastapi.tiangolo.com/
 - **SQLAlchemy 2.0**: https://docs.sqlalchemy.org/
 - **Alembic**: https://alembic.sqlalchemy.org/
@@ -1090,11 +1139,13 @@ To start working on this project:
 - **Pydantic**: https://docs.pydantic.dev/
 
 ### Data Providers
+
 - **Yahoo Finance**: https://github.com/ranaroussi/yfinance
 - **Alpha Vantage**: https://www.alphavantage.co/documentation/
 - **NewsAPI**: https://newsapi.org/docs
 
 ### Development Tools
+
 - **Ruff**: https://docs.astral.sh/ruff/
 - **Mypy**: https://mypy.readthedocs.io/
 - **Pytest**: https://docs.pytest.org/
@@ -1104,6 +1155,7 @@ To start working on this project:
 ## Contact & Support
 
 For questions about:
+
 - **Architecture decisions**: See PLAN.md
 - **Requirements**: See SPECIFICATION.md
 - **Principles**: See CONSTITUTION.md
@@ -1113,6 +1165,7 @@ For questions about:
 ---
 
 **Remember**:
+
 - **Facts-first**: Never invent data
 - **Reproducibility**: Version everything
 - **Safety**: Read-only in v1

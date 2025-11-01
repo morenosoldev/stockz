@@ -12,7 +12,7 @@ from typing import Any
 
 import pandas as pd
 import yfinance as yf
-from yfinance.exceptions import YFException
+from yfinance.exceptions import YFinanceException
 
 from src.datasources.attribution import create_attribution
 from src.datasources.base import (
@@ -371,7 +371,7 @@ class PriceAdapter(BaseDataAdapter):
         except DataNotFoundError:
             # Re-raise DataNotFoundError as-is (don't wrap it)
             raise
-        except YFException as e:
+        except YFinanceException as e:
             raise PriceDataError(
                 f"Yahoo Finance error for {ticker}: {e}",
                 source=self.source,
@@ -477,7 +477,7 @@ class PriceAdapter(BaseDataAdapter):
 
             return price_data
 
-        except (YFException, KeyError, ValueError, IndexError) as e:
+        except (YFinanceException, KeyError, ValueError, IndexError) as e:
             raise PriceDataError(
                 f"Failed to fetch latest price for {ticker}: {e}",
                 source=self.source,
@@ -564,7 +564,7 @@ class PriceAdapter(BaseDataAdapter):
         except DataNotFoundError:
             # Re-raise DataNotFoundError as-is
             raise
-        except (YFException, KeyError, ValueError) as e:
+        except (YFinanceException, KeyError, ValueError) as e:
             raise PriceDataError(
                 f"Failed to fetch ticker info for {ticker}: {e}",
                 source=self.source,

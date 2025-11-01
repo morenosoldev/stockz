@@ -116,6 +116,7 @@ async def stream_scan_logs(
                             "data": json.dumps(
                                 {
                                     "tickersProcessed": stats["tickers_processed"],
+                                    "totalTickers": stats["total_tickers"],
                                     "candidatesFound": stats["candidates_found"],
                                     "errors": stats["errors"],
                                     "durationSeconds": stats["duration_seconds"],
@@ -134,6 +135,7 @@ async def stream_scan_logs(
                                     {
                                         "status": stats["status"],
                                         "tickersProcessed": stats["tickers_processed"],
+                                        "totalTickers": stats["total_tickers"],
                                         "candidatesFound": stats["candidates_found"],
                                         "durationSeconds": stats["duration_seconds"],
                                     }

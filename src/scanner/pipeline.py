@@ -100,30 +100,40 @@ class ScanPipeline:
             if not self.strategy.filters(ticker_data):
                 elapsed = (datetime.now(UTC) - start_time).total_seconds() * 1000
 
-                # Include basic info even for skipped tickers
-                price_change = ticker_data.get("price_change_pct", 0)
-                market_cap = ticker_data.get("market_cap", 0)
-                avg_volume = ticker_data.get("avg_volume", 0)
+                # Determine skip reason based on strategy type
+                needs_price_data = getattr(self.strategy, "requires_price_data", True)
 
-                # Determine skip reason
-                skip_reason = "did not pass filter"
-                if market_cap < 1_000_000_000:
-                    skip_reason = "market cap too small"
-                elif avg_volume < 1_000_000:
-                    skip_reason = "volume too low"
-                elif not (-15 <= price_change <= -5):
-                    if price_change > -5:
-                        skip_reason = f"drop too small ({price_change:+.1f}%)"
-                    else:
-                        skip_reason = f"drop too large ({price_change:+.1f}%)"
+                if needs_price_data:
+                    # Price-based strategy (e.g., drop5) - show price-related skip reasons
+                    price_change = ticker_data.get("price_change_pct", 0)
+                    market_cap = ticker_data.get("market_cap", 0)
+                    avg_volume = ticker_data.get("avg_volume", 0)
 
-                basic_features = {
-                    "price": ticker_data.get("price"),
-                    "sector": ticker_data.get("sector"),
-                    "market_cap": market_cap,
-                    "drop_pct": price_change,
-                    "skip_reason": skip_reason,
-                }
+                    skip_reason = "did not pass filter"
+                    if market_cap < 1_000_000_000:
+                        skip_reason = "market cap too small"
+                    elif avg_volume < 1_000_000:
+                        skip_reason = "volume too low"
+                    elif not (-15 <= price_change <= -5):
+                        if price_change > -5:
+                            skip_reason = f"drop too small ({price_change:+.1f}%)"
+                        else:
+                            skip_reason = f"drop too large ({price_change:+.1f}%)"
+
+                    basic_features = {
+                        "price": ticker_data.get("price"),
+                        "sector": ticker_data.get("sector"),
+                        "market_cap": market_cap,
+                        "drop_pct": price_change,
+                        "skip_reason": skip_reason,
+                    }
+                else:
+                    # Non-price strategy (e.g., reddit) - show strategy-specific reason
+                    skip_reason = f"not mentioned on {self.strategy.name}"
+                    basic_features = {
+                        "skip_reason": skip_reason,
+                    }
+
                 return PipelineResult(
                     ticker=ticker,
                     passed_filter=False,
@@ -177,6 +187,27 @@ class ScanPipeline:
         Returns:
             Dictionary with ticker data and indicators
         """
+        # Build minimal ticker data for filter check
+        # For non-price strategies (e.g., Reddit), this is all they need
+        ticker_data = {
+            "ticker": ticker,
+            "symbol": ticker,  # Alias for compatibility
+            "asof": asof,
+        }
+
+        # Check if strategy needs price data by checking if it's a BaseStrategy
+        # with requires_price_data attribute
+        needs_price_data = getattr(self.strategy, "requires_price_data", True)
+
+        # If strategy doesn't need price data, return minimal data
+        if not needs_price_data:
+            self.logger.debug(
+                "Skipping price data fetch for non-price strategy",
+                ticker=ticker,
+                strategy=self.strategy.name,
+            )
+            return ticker_data
+
         # Fetch ticker metadata
         info = self.price_adapter.get_ticker_info(ticker)
 
@@ -189,18 +220,19 @@ class ScanPipeline:
         # Calculate technical indicators
         indicators = self._calculate_indicators(bars)
 
-        # Build ticker data dictionary
-        ticker_data = {
-            "ticker": ticker,
-            "price": latest.get("price", 0.0),  # Add current price
-            "market_cap": info.get("market_cap", 0),
-            "avg_volume": info.get("avg_volume", 0),
-            "sector": info.get("sector"),
-            "industry": info.get("industry"),
-            "price_change_pct": latest.get("change_pct", 0.0),
-            "bars": self._bars_to_dict_list(bars),
-            "indicators": indicators,
-        }
+        # Build full ticker data dictionary
+        ticker_data.update(
+            {
+                "price": latest.get("price", 0.0),  # Add current price
+                "market_cap": info.get("market_cap", 0),
+                "avg_volume": info.get("avg_volume", 0),
+                "sector": info.get("sector"),
+                "industry": info.get("industry"),
+                "price_change_pct": latest.get("change_pct", 0.0),
+                "bars": self._bars_to_dict_list(bars),  # type: ignore[dict-item]
+                "indicators": indicators,  # type: ignore[dict-item]
+            }
+        )
 
         return ticker_data
 

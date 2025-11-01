@@ -24,21 +24,28 @@ classifiers = [
 
 dependencies = [
     "fastapi>=0.104.0",
-    "uvicorn[standard]>=0.24.0",
-    "sqlalchemy>=2.0.23",
-    "alembic>=1.12.1",
-    "psycopg2-binary>=2.9.9",
-    "pydantic>=2.5.0",
-    "pydantic-settings>=2.1.0",
-    "apscheduler>=3.10.4",
-    "httpx>=0.25.1",
-    "pandas>=2.1.3",
-    "numpy>=1.26.2",
-    "python-dotenv>=1.0.0",
-    "pyyaml>=6.0.1",
-    "python-multipart>=0.0.6",
-    "yfinance>=0.2.32",
-    "structlog>=24.1.0",
+    "uvicorn[standard]==0.38.0",
+    "sqlalchemy==2.0.23",
+    "alembic==1.12.1",
+    "psycopg2-binary==2.9.11",
+    "pydantic>=2.7.4,<3.0.0",
+    "pydantic-settings==2.1.0",
+    "apscheduler==3.10.4",
+    "httpx==0.28.1",
+    "pandas==2.1.3",
+    "numpy==1.26.4",
+    "python-dotenv==1.0.0",
+    "pyyaml==6.0.1",
+    "python-multipart==0.0.20",
+    "yfinance==0.2.33",
+    "structlog==25.5.0",
+    "langchain-core==1.0.2",
+    "langchain-openai==1.0.1",
+    "langgraph==1.0.2",
+    "sse-starlette==3.0.3",
+    "praw>=7.7.1",
+    "prawcore>=2.4.0",
+    "openai>=1.0.0",
 ]
 
 [project.optional-dependencies]
@@ -144,6 +151,18 @@ ignore_missing_imports = true
 module = "yfinance.*"
 ignore_missing_imports = true
 
+[[tool.mypy.overrides]]
+module = "praw.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "sse_starlette.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "langgraph.*"
+ignore_missing_imports = true
+
 # SQLAlchemy 2.0 DeclarativeBase type issues
 [[tool.mypy.overrides]]
 module = "src.storage.database"
@@ -162,6 +181,11 @@ disable_error_code = ["misc"]
 module = "src.api.main"
 disable_error_code = ["misc"]
 
+# Scanner module uses dynamic attribute checking for strategy flexibility
+[[tool.mypy.overrides]]
+module = "src.scanner.*"
+disable_error_code = ["unused-ignore"]
+
 # Relax strict typing for data processing modules with pandas
 [[tool.mypy.overrides]]
 module = "src.features.*"
@@ -172,6 +196,11 @@ disable_error_code = ["call-overload", "operator"]
 [[tool.mypy.overrides]]
 module = "src.datasources.prices"
 warn_return_any = false
+
+[[tool.mypy.overrides]]
+module = "src.datasources.reddit"
+warn_return_any = false
+disable_error_code = ["no-any-return"]
 
 [[tool.mypy.overrides]]
 module = "tests.*"

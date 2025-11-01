@@ -8,6 +8,7 @@ Orchestrates the complete scanning process:
 5. Generate run metadata
 """
 
+import threading
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
@@ -18,7 +19,7 @@ from sqlalchemy.orm import Session
 
 from src.datasources.prices import PriceAdapter
 from src.ops.config import get_config
-from src.ops.logging import get_logger, update_scan_status
+from src.ops.logging import get_logger, set_total_tickers, update_scan_status
 from src.scanner.executor import ConcurrentExecutor, ExecutorConfig
 from src.scanner.pipeline import ScanPipeline
 from src.storage.database import SessionLocal
@@ -27,6 +28,52 @@ from src.strategies.base import StrategyProtocol
 from src.strategies.registry import get_registry
 
 logger = get_logger(__name__)
+
+
+# Class-level dictionary to track interrupt flags for each run_id
+# Key: run_id (str), Value: threading.Event
+_interrupt_flags: dict[str, threading.Event] = {}
+
+
+def request_interrupt(run_id: str) -> bool:
+    """Request interrupt for a running scan.
+
+    Args:
+        run_id: Run ID to interrupt
+
+    Returns:
+        True if interrupt flag was set, False if run_id not found
+    """
+    if run_id in _interrupt_flags:
+        _interrupt_flags[run_id].set()
+        logger.info("Interrupt requested", run_id=run_id)
+        return True
+    return False
+
+
+def is_interrupted(run_id: str) -> bool:
+    """Check if interrupt has been requested for a run.
+
+    Args:
+        run_id: Run ID to check
+
+    Returns:
+        True if interrupt requested, False otherwise
+    """
+    if run_id in _interrupt_flags:
+        return _interrupt_flags[run_id].is_set()
+    return False
+
+
+def clear_interrupt(run_id: str) -> None:
+    """Clear interrupt flag for a completed run.
+
+    Args:
+        run_id: Run ID to clear
+    """
+    if run_id in _interrupt_flags:
+        del _interrupt_flags[run_id]
+        logger.debug("Interrupt flag cleared", run_id=run_id)
 
 
 @dataclass
@@ -108,15 +155,15 @@ class ScanEngine:
             self.logger.warning("No strategies to execute")
             return []
 
-        # Load universe
-        universe = self._load_universe(config.universe_size)
+        # Load default universe (S&P 500)
+        default_universe = self._load_universe(config.universe_size)
 
         self.logger.info(
             "Starting scan",
             extra={
                 "date": asof.isoformat(),
                 "strategies": [s.name for s in strategies],
-                "universe_size": len(universe),
+                "default_universe_size": len(default_universe),
             },
         )
 
@@ -124,7 +171,34 @@ class ScanEngine:
         results = []
         for idx, strategy in enumerate(strategies):
             # Use provided run_id or generate new one
-            run_id = run_ids[idx] if run_ids and idx < len(run_ids) else None
+            run_id = run_ids[idx] if run_ids and idx < len(run_ids) else str(uuid.uuid4())
+
+            # Bind run_id to structlog context early so get_universe() logs have run_id
+            structlog.contextvars.clear_contextvars()
+            structlog.contextvars.bind_contextvars(run_id=run_id)
+
+            # Check if strategy provides its own universe (e.g., Reddit strategy)
+            if hasattr(strategy, "provides_own_universe") and strategy.provides_own_universe:  # type: ignore[attr-defined]
+                # Strategy discovers its own tickers (e.g., from Reddit, news, etc.)
+                if hasattr(strategy, "get_universe"):
+                    universe = strategy.get_universe(asof)  # type: ignore[attr-defined]
+                    self.logger.info(
+                        f"Strategy '{strategy.name}' using custom universe",
+                        extra={
+                            "strategy": strategy.name,
+                            "custom_universe_size": len(universe),
+                        },
+                    )
+                else:
+                    self.logger.warning(
+                        f"Strategy '{strategy.name}' has provides_own_universe=True but no get_universe() method",
+                        extra={"strategy": strategy.name},
+                    )
+                    universe = default_universe
+            else:
+                # Use default S&P 500 universe
+                universe = default_universe
+
             result = self._run_strategy(strategy, universe, asof, config, run_id)
             results.append(result)
 
@@ -203,9 +277,14 @@ class ScanEngine:
         run_id = run_id or str(uuid.uuid4())
         start_time = datetime.now(UTC)
 
-        # Bind run_id to structlog context for all logs in this scope
-        structlog.contextvars.clear_contextvars()
-        structlog.contextvars.bind_contextvars(run_id=run_id)
+        # Initialize interrupt flag for this run
+        _interrupt_flags[run_id] = threading.Event()
+
+        # run_id context already bound before get_universe() call
+        # No need to bind again here
+
+        # Set total tickers for progress tracking
+        set_total_tickers(run_id, len(universe))
 
         self.logger.info(
             "Starting strategy run",
@@ -271,17 +350,73 @@ class ScanEngine:
                                 drop_str = f" | Drop: {drop_pct:.1f}%" if drop_pct else ""
                                 rsi_str = f" | RSI: {rsi:.1f}" if rsi else ""
                                 msg = f"✅ {ticker}: {price_str} - Score {result.score:.2f}{sector_str}{drop_str}{rsi_str}"
-                                self.logger.info(
-                                    msg,
-                                    run_id=run_id,
-                                    ticker=ticker,
-                                    price=price,
-                                    score=result.score,
-                                    sector=sector,
-                                    market_cap=market_cap,
-                                    drop_pct=drop_pct,
-                                    rsi=rsi,
-                                )
+
+                                # Log detailed rationale for Reddit strategy
+                                if strategy.name == "reddit" and result.features:
+                                    llm_reasoning = result.features.get("llm_reasoning", [])
+                                    catalysts = result.features.get("catalysts", [])
+                                    risk_factors = result.features.get("risk_factors", [])
+                                    mentions = result.features.get("mentions", 0)
+
+                                    # Log main candidate line
+                                    self.logger.info(
+                                        msg,
+                                        run_id=run_id,
+                                        ticker=ticker,
+                                        price=price,
+                                        score=result.score,
+                                        sector=sector,
+                                        market_cap=market_cap,
+                                        mentions=mentions,
+                                    )
+
+                                    # Log LLM reasoning details
+                                    if llm_reasoning:
+                                        self.logger.info(
+                                            f"💭 {ticker} - LLM Analysis ({mentions} mentions):",
+                                            run_id=run_id,
+                                            ticker=ticker,
+                                        )
+                                        for idx, reasoning in enumerate(llm_reasoning, 1):
+                                            self.logger.info(
+                                                f"  📝 Analysis {idx}: {reasoning}",
+                                                run_id=run_id,
+                                                ticker=ticker,
+                                                reasoning=reasoning,
+                                            )
+
+                                    # Log catalysts
+                                    if catalysts:
+                                        catalysts_str = ", ".join(catalysts)
+                                        self.logger.info(
+                                            f"  📈 Catalysts: {catalysts_str}",
+                                            run_id=run_id,
+                                            ticker=ticker,
+                                            catalysts=catalysts,
+                                        )
+
+                                    # Log risk factors
+                                    if risk_factors:
+                                        risks_str = ", ".join(risk_factors)
+                                        self.logger.info(
+                                            f"  ⚠️ Risks: {risks_str}",
+                                            run_id=run_id,
+                                            ticker=ticker,
+                                            risk_factors=risk_factors,
+                                        )
+                                else:
+                                    # Non-Reddit strategy or no features
+                                    self.logger.info(
+                                        msg,
+                                        run_id=run_id,
+                                        ticker=ticker,
+                                        price=price,
+                                        score=result.score,
+                                        sector=sector,
+                                        market_cap=market_cap,
+                                        drop_pct=drop_pct,
+                                        rsi=rsi,
+                                    )
                             elif result.passed_filter:
                                 price_str = f"${price:.2f}" if price else "N/A"
                                 sector_str = f" | {sector}" if sector else ""
@@ -318,15 +453,18 @@ class ScanEngine:
 
             # Execute scan with progress tracking
             results, exec_stats = executor.execute(
-                universe, asof, progress_callback=update_progress
+                universe, asof, progress_callback=update_progress, run_id=run_id
             )
+
+            # Check if interrupted
+            was_interrupted = is_interrupted(run_id)
 
             # Get candidates
             candidates = pipeline.get_candidates(results)
 
             duration = (datetime.now(UTC) - start_time).total_seconds()
 
-            # Persist results
+            # Persist results (including partial results if interrupted)
             self._persist_results(
                 run_id=run_id,
                 run_date=asof,
@@ -335,27 +473,33 @@ class ScanEngine:
                 candidates=candidates,
                 duration=duration,
                 config=config,
+                interrupted=was_interrupted,
             )
 
             self.logger.info(
-                "Strategy run complete",
+                "Strategy run complete" if not was_interrupted else "Strategy run stopped",
                 extra={
                     "run_id": run_id,
                     "strategy": strategy.name,
                     "processed": exec_stats.processed,
                     "candidates": len(candidates),
                     "duration_sec": f"{duration:.2f}",
+                    "interrupted": was_interrupted,
                 },
             )
 
-            # Update in-memory status to "completed"
-            update_scan_status(run_id, "completed")
+            # Update in-memory status
+            final_status = "stopped" if was_interrupted else "completed"
+            update_scan_status(run_id, final_status)
+
+            # Clear interrupt flag
+            clear_interrupt(run_id)
 
             return ScanResult(
                 run_id=run_id,
                 run_date=asof,
                 strategy=strategy.name,
-                status="completed",
+                status=final_status,
                 duration_seconds=duration,
                 tickers_processed=exec_stats.processed,
                 candidates_found=len(candidates),
@@ -378,6 +522,9 @@ class ScanEngine:
             # Update in-memory status to "failed"
             update_scan_status(run_id, "failed")
 
+            # Clear interrupt flag
+            clear_interrupt(run_id)
+
             return ScanResult(
                 run_id=run_id,
                 run_date=asof,
@@ -398,6 +545,7 @@ class ScanEngine:
         candidates: list[dict[str, Any]],
         duration: float,
         config: ScanConfig,
+        interrupted: bool = False,
     ) -> None:
         """Persist scan results to database.
 
@@ -411,6 +559,7 @@ class ScanEngine:
             candidates: Candidate dictionaries
             duration: Execution duration
             config: Scan configuration
+            interrupted: Whether the scan was interrupted by user
         """
         # Use provided session or create new one
         session = self.db_session or SessionLocal()
@@ -438,24 +587,109 @@ class ScanEngine:
                 session.flush()  # Ensure delete completes before insert
 
             # Create Run record
+            run_status = "stopped" if interrupted else "completed"
+            config_snapshot = {
+                "min_score": config.min_score,
+                "max_workers": config.max_workers,
+                "lookback_days": config.lookback_days,
+                "strategy_version": strategy.version,
+            }
+
+            # Add interrupted flag to config snapshot
+            if interrupted:
+                config_snapshot["interrupted"] = True
+                # Find the last ticker processed
+                if results:
+                    last_ticker = results[-1].ticker if results else None
+                    if last_ticker:
+                        config_snapshot["stopped_at_ticker"] = last_ticker
+
             run = Run(
                 run_id=uuid.UUID(run_id),
                 run_date=run_date,
                 strategy=strategy.name,
-                status="completed",
+                status=run_status,
                 started_at=datetime.now(UTC),
                 completed_at=datetime.now(UTC),
                 duration_seconds=int(duration),
                 tickers_processed=len([r for r in results if not r.error]),
                 candidates_found=len(candidates),
-                config_snapshot={
-                    "min_score": config.min_score,
-                    "max_workers": config.max_workers,
-                    "lookback_days": config.lookback_days,
-                    "strategy_version": strategy.version,
-                },
+                config_snapshot=config_snapshot,
             )
             session.add(run)
+
+            # Ensure all tickers exist FIRST (before creating Features/Candidates)
+            all_tickers = set()
+            for result in results:
+                if result.features:
+                    all_tickers.add(result.ticker)
+            for candidate in candidates:
+                all_tickers.add(candidate["ticker"])
+
+            # Check if strategy provides own universe (e.g., Reddit) - skip ticker info fetching
+            skip_ticker_info = (
+                hasattr(strategy, "provides_own_universe") and strategy.provides_own_universe
+            )  # type: ignore[attr-defined]
+
+            for ticker_symbol in all_tickers:
+                ticker_record = session.query(Ticker).filter(Ticker.symbol == ticker_symbol).first()
+                if not ticker_record:
+                    if skip_ticker_info:
+                        # For custom universe strategies (Reddit, news, etc.), skip ticker info fetching
+                        # These strategies don't need stock fundamentals - they analyze sentiment/events
+                        self.logger.info(
+                            "Creating ticker with minimal data (custom universe strategy)",
+                            extra={
+                                "ticker": ticker_symbol,
+                                "strategy": strategy.name,
+                                "run_id": run_id,
+                            },
+                        )
+                        ticker_record = Ticker(
+                            symbol=ticker_symbol,
+                            name=ticker_symbol,  # Use symbol as name
+                            sector="Unknown",
+                            industry="Unknown",
+                            market_cap=0,
+                            is_active=True,
+                        )
+                        session.add(ticker_record)
+                        session.flush()
+                    else:
+                        # For traditional strategies (drop5, etc.), fetch ticker info
+                        self.logger.info(
+                            "Creating missing ticker record",
+                            extra={"ticker": ticker_symbol, "run_id": run_id},
+                        )
+                        try:
+                            # Fetch ticker info
+                            ticker_info = self.price_adapter.get_ticker_info(ticker_symbol)
+                            ticker_record = Ticker(
+                                symbol=ticker_symbol,
+                                name=ticker_info.get("name", ticker_symbol),
+                                sector=ticker_info.get("sector", "Unknown"),
+                                industry=ticker_info.get("industry", "Unknown"),
+                                market_cap=ticker_info.get("market_cap", 0),
+                                is_active=True,
+                            )
+                            session.add(ticker_record)
+                            session.flush()  # Ensure ticker is created before features/candidates
+                        except Exception as e:
+                            # If we can't fetch ticker info, create with minimal data
+                            self.logger.warning(
+                                "Failed to fetch ticker info, using minimal data",
+                                extra={"ticker": ticker_symbol, "error": str(e)},
+                            )
+                            ticker_record = Ticker(
+                                symbol=ticker_symbol,
+                                name=ticker_symbol,  # Use symbol as name
+                                sector="Unknown",
+                                industry="Unknown",
+                                market_cap=0,
+                                is_active=True,
+                            )
+                            session.add(ticker_record)
+                            session.flush()
 
             # Create Feature records
             for result in results:
@@ -475,53 +709,31 @@ class ScanEngine:
             for candidate in candidates:
                 ticker_symbol = candidate["ticker"]
 
-                # Ensure ticker exists in database (get-or-create pattern)
-                ticker_record = session.query(Ticker).filter(Ticker.symbol == ticker_symbol).first()
-                if not ticker_record:
-                    self.logger.info(
-                        "Creating missing ticker record",
-                        extra={"ticker": ticker_symbol, "run_id": run_id},
-                    )
-                    try:
-                        # Fetch ticker info
-                        ticker_info = self.price_adapter.get_ticker_info(ticker_symbol)
-                        ticker_record = Ticker(
-                            symbol=ticker_symbol,
-                            name=ticker_info.get("name", ticker_symbol),
-                            sector=ticker_info.get("sector", "Unknown"),
-                            industry=ticker_info.get("industry", "Unknown"),
-                            market_cap=ticker_info.get("market_cap", 0),
-                            is_active=True,
-                        )
-                        session.add(ticker_record)
-                        session.flush()  # Ensure ticker is created before candidate
-                    except Exception as e:
-                        # If we can't fetch ticker info, create with minimal data
-                        self.logger.warning(
-                            "Failed to fetch ticker info, using minimal data",
-                            extra={"ticker": ticker_symbol, "error": str(e)},
-                        )
-                        ticker_record = Ticker(
-                            symbol=ticker_symbol,
-                            name=ticker_symbol,  # Use symbol as name
-                            sector="Unknown",
-                            industry="Unknown",
-                            market_cap=0,
-                            is_active=True,
-                        )
-                        session.add(ticker_record)
-                        session.flush()
+                # Build comprehensive rationale
+                rationale = {
+                    "features": candidate["features"],
+                    "processing_time_ms": candidate["processing_time_ms"],
+                }
 
+                # For Reddit strategy, include detailed LLM rationale
+                if strategy.name == "reddit" and candidate.get("features"):
+                    features = candidate["features"]
+                    rationale["llm_analysis"] = {
+                        "mentions": features.get("mentions", 0),
+                        "reasoning": features.get("llm_reasoning", []),
+                        "catalysts": features.get("catalysts", []),
+                        "risk_factors": features.get("risk_factors", []),
+                        "sentiment_details": features.get("sentiment_details", []),
+                    }
+
+                # Ticker now guaranteed to exist from ticker creation loop above
                 candidate_record = Candidate(
                     ticker_symbol=ticker_symbol,
                     run_id=uuid.UUID(run_id),
                     asof=run_date,
                     strategy=strategy.name,
                     score=candidate["score"],
-                    rationale={
-                        "features": candidate["features"],
-                        "processing_time_ms": candidate["processing_time_ms"],
-                    },
+                    rationale=rationale,
                     attribution={},  # TODO: Add attribution
                 )
                 session.add(candidate_record)

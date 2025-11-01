@@ -17,6 +17,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from src.datasources.base import BaseDataAdapter
+from src.ops.config import get_config
 from src.ops.logging import get_logger
 
 logger = get_logger(__name__)
@@ -514,3 +516,134 @@ class Cache:
             "total_size_bytes": total_size,
             "ttl_seconds": self.ttl_seconds,
         }
+
+
+class CachedDataAdapter(BaseDataAdapter):
+    """Base class for data adapters with caching support.
+
+    Extends BaseDataAdapter to provide automatic caching functionality
+    for all fetch operations. Subclasses get caching for free.
+
+    Attributes:
+        cache: Cache instance for storing fetched data
+        cache_enabled: Whether caching is currently enabled
+        cache_ttl: Cache TTL in seconds
+
+    Example:
+        >>> class MyAdapter(CachedDataAdapter):
+        ...     def fetch(self, key: str) -> dict:
+        ...         # Try cache first
+        ...         cached = self._get_from_cache(key)
+        ...         if cached:
+        ...             return cached
+        ...         # Fetch from API
+        ...         data = self._fetch_from_api(key)
+        ...         # Save to cache
+        ...         self._save_to_cache(key, data)
+        ...         return data
+    """
+
+    def __init__(
+        self,
+        cache_enabled: bool = True,
+        cache_ttl: int | None = None,
+    ) -> None:
+        """Initialize cached data adapter.
+
+        Args:
+            cache_enabled: Whether to enable caching (default: True)
+            cache_ttl: Cache TTL in seconds (default: from config)
+        """
+        super().__init__()
+
+        # Get cache config
+        config = get_config()
+        cache_config = config.datasources.cache
+
+        self.cache_enabled = cache_enabled
+        self.cache_ttl = cache_ttl if cache_ttl is not None else cache_config.ttl_seconds
+
+        # Initialize cache instance
+        if self.cache_enabled:
+            self.cache = Cache(
+                cache_dir=cache_config.cache_dir,
+                ttl_seconds=self.cache_ttl,
+                use_compression=cache_config.use_compression,
+            )
+            self.logger.debug(
+                "Cache initialized",
+                extra={
+                    "cache_dir": cache_config.cache_dir,
+                    "ttl_seconds": self.cache_ttl,
+                },
+            )
+        else:
+            self.cache = None  # type: ignore
+            self.logger.debug("Cache disabled")
+
+    def _get_from_cache(self, key: str | dict[str, Any]) -> Any | None:
+        """Get data from cache.
+
+        Args:
+            key: Cache key (string or dict)
+
+        Returns:
+            Cached data if found and not expired, None otherwise
+        """
+        if not self.cache_enabled or self.cache is None:
+            return None
+
+        return self.cache.get(key)
+
+    def _save_to_cache(
+        self,
+        key: str | dict[str, Any],
+        data: Any,
+        ttl_seconds: int | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> bool:
+        """Save data to cache.
+
+        Args:
+            key: Cache key (string or dict)
+            data: Data to cache
+            ttl_seconds: Custom TTL (None = use default)
+            metadata: Optional metadata to store
+
+        Returns:
+            True if saved successfully, False otherwise
+        """
+        if not self.cache_enabled or self.cache is None:
+            return False
+
+        return self.cache.set(
+            key=key,
+            data=data,
+            ttl_seconds=ttl_seconds,
+            metadata=metadata,
+        )
+
+    def _delete_from_cache(self, key: str | dict[str, Any]) -> bool:
+        """Delete data from cache.
+
+        Args:
+            key: Cache key (string or dict)
+
+        Returns:
+            True if deleted, False otherwise
+        """
+        if not self.cache_enabled or self.cache is None:
+            return False
+
+        return self.cache.delete(key)
+
+    def clear_cache(self) -> int:
+        """Clear all cached data for this adapter.
+
+        Returns:
+            Number of entries cleared
+        """
+        if not self.cache_enabled or self.cache is None:
+            return 0
+
+        return self.cache.clear()

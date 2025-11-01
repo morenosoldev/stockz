@@ -14,13 +14,13 @@ repos:
       # Run the formatter
       - id: ruff-format
 
-  # Black - Python code formatter
-  - repo: https://github.com/psf/black
-    rev: 25.9.0
-    hooks:
-      - id: black
-        language_version: python3.13
-        args: [--line-length=100]
+  # Black - Python code formatter (disabled - using ruff-format instead to avoid conflicts)
+  # - repo: https://github.com/psf/black
+  #   rev: 25.9.0
+  #   hooks:
+  #     - id: black
+  #       language_version: python3.11
+  #       args: [--line-length=100]
 
   # Mypy - Static type checker
   - repo: https://github.com/pre-commit/mirrors-mypy
@@ -58,7 +58,7 @@ repos:
       - id: check-toml
       # Check for valid YAML
       - id: check-yaml
-        args: [--unsafe]  # Allow custom YAML tags
+        args: [--unsafe] # Allow custom YAML tags
       # Ensure files end with newline
       - id: end-of-file-fixer
       # Remove trailing whitespace

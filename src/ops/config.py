@@ -193,6 +193,20 @@ class DataSourceConfig(BaseSettings):
         description="NewsAPI key",
     )
 
+    # Reddit API (for sentiment strategy)
+    reddit_client_id: str | None = Field(
+        default=None,
+        description="Reddit API client ID",
+    )
+    reddit_client_secret: str | None = Field(
+        default=None,
+        description="Reddit API client secret",
+    )
+    reddit_user_agent: str | None = Field(
+        default=None,
+        description="Reddit API user agent",
+    )
+
     # General API settings
     api_timeout: int = Field(default=30, description="API request timeout (seconds)", ge=5)
     api_retry_attempts: int = Field(
@@ -387,6 +401,12 @@ class Config(BaseSettings):
                     "***REDACTED***" if self.datasources.alpha_vantage_api_key else None
                 ),
                 "news_api_key": "***REDACTED***" if self.datasources.news_api_key else None,
+                "reddit_client_id": (
+                    "***REDACTED***" if self.datasources.reddit_client_id else None
+                ),
+                "reddit_client_secret": (
+                    "***REDACTED***" if self.datasources.reddit_client_secret else None
+                ),
             },
             "strategies": self.strategies.model_dump(),
             "features": self.features.model_dump(),

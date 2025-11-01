@@ -25,14 +25,14 @@ from src.ops.config import get_config
 _logger_cache: dict[str, structlog.BoundLogger] = {}
 
 # Global async queues for SSE streaming (one queue per run_id)
-_log_queues: dict[str, asyncio.Queue[dict[str, Any]]] = defaultdict(
-    lambda: asyncio.Queue(maxsize=1000)
-)
+# Queues are created by SSE endpoint when client connects (in async context)
+_log_queues: dict[str, asyncio.Queue[dict[str, Any]]] = {}
 
 # In-memory stats tracker for real-time updates (no database!)
 _scan_stats: dict[str, dict[str, Any]] = defaultdict(
     lambda: {
         "tickers_processed": 0,
+        "total_tickers": 0,
         "candidates_found": 0,
         "errors": 0,
         "start_time": None,
@@ -111,7 +111,9 @@ def setup_logging(
     # Define SSE streaming processor
     def sse_stream_processor(logger: Any, method_name: str, event_dict: EventDict) -> EventDict:
         """Stream logs with run_id to SSE queues in REAL-TIME."""
-        run_id = event_dict.get("run_id")
+        # Get run_id from contextvars first (set by scanner), then from event_dict
+        run_id = structlog.contextvars.get_contextvars().get("run_id") or event_dict.get("run_id")
+
         if run_id:
             run_id_str = str(run_id)
 
@@ -164,17 +166,19 @@ def setup_logging(
                 if field in event_dict:
                     log_entry[field] = event_dict[field]
 
-            # Push to queue immediately (non-blocking)
-            queue = _log_queues[run_id_str]
-            try:
-                queue.put_nowait(log_entry)
-            except asyncio.QueueFull:
-                # Queue is full, drop oldest log (shouldn't happen with 1000 size)
+            # Push to queue immediately (non-blocking) - ONLY if queue exists
+            # Queue is created by SSE endpoint when client connects
+            if run_id_str in _log_queues:
+                queue = _log_queues[run_id_str]
                 try:
-                    queue.get_nowait()
                     queue.put_nowait(log_entry)
-                except Exception:
-                    pass  # If still fails, just skip this log
+                except asyncio.QueueFull:
+                    # Queue is full, drop oldest log (shouldn't happen with 1000 size)
+                    try:
+                        queue.get_nowait()
+                        queue.put_nowait(log_entry)
+                    except Exception:
+                        pass  # If still fails, just skip this log
         return event_dict
 
     # Configure structlog processors
@@ -362,6 +366,11 @@ async def stream_logs(run_id: str | UUID) -> AsyncIterator[dict[str, Any]]:
         dict: Log entry with timestamp, level, message, etc.
     """
     run_id_str = str(run_id)
+
+    # Create queue if it doesn't exist yet (SSE endpoint creates it here!)
+    if run_id_str not in _log_queues:
+        _log_queues[run_id_str] = asyncio.Queue(maxsize=1000)
+
     queue = _log_queues[run_id_str]
 
     try:
@@ -401,7 +410,7 @@ def get_scan_stats(run_id: str | UUID) -> dict[str, Any]:
         run_id: UUID of the scan run
 
     Returns:
-        dict with tickers_processed, candidates_found, errors, duration_seconds, status
+        dict with tickers_processed, total_tickers, candidates_found, errors, duration_seconds, status
     """
     run_id_str = str(run_id)
     stats = _scan_stats[run_id_str]
@@ -413,6 +422,7 @@ def get_scan_stats(run_id: str | UUID) -> dict[str, Any]:
 
     return {
         "tickers_processed": stats["tickers_processed"],
+        "total_tickers": stats["total_tickers"],
         "candidates_found": stats["candidates_found"],
         "errors": stats["errors"],
         "duration_seconds": duration_seconds,
@@ -424,3 +434,9 @@ def update_scan_status(run_id: str | UUID, status: str) -> None:
     """Update the status of a scan run in memory."""
     run_id_str = str(run_id)
     _scan_stats[run_id_str]["status"] = status
+
+
+def set_total_tickers(run_id: str | UUID, total: int) -> None:
+    """Set the total number of tickers for a scan run."""
+    run_id_str = str(run_id)
+    _scan_stats[run_id_str]["total_tickers"] = total

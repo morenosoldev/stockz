@@ -5,8 +5,8 @@ Endpoints:
 - GET /scan/{run_id}/status - Check scan status
 """
 
+from datetime import UTC, datetime
 from datetime import date as date_type
-from datetime import datetime
 from typing import Any
 from uuid import UUID
 
@@ -248,9 +248,9 @@ def execute_scan_task(
             run = db.query(Run).filter(Run.run_id == run_id).first()
             if run:
                 run.status = RunStatus.COMPLETED.value  # type: ignore[assignment]
-                run.completed_at = datetime.now()  # type: ignore[assignment]
+                run.completed_at = datetime.now(UTC)  # type: ignore[assignment]
                 # Calculate duration
-                now = datetime.now()
+                now = datetime.now(UTC)
                 if run.started_at:
                     started_at: datetime = run.started_at  # type: ignore[assignment]
                     duration = int((now - started_at).total_seconds())
@@ -461,6 +461,7 @@ async def get_scan_status(
     - `running`: Scan currently executing
     - `completed`: Scan finished successfully
     - `failed`: Scan encountered errors
+    - `stopped`: Scan interrupted by user
 
     **Status Codes**:
     - 200: Status retrieved successfully
@@ -508,3 +509,80 @@ async def get_scan_status(
             "error_details": run.error_details,
         }
     )
+
+
+@router.delete("/{run_id}/stop")
+async def stop_scan(
+    run_id: str,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Stop a running scan mid-execution.
+
+    Gracefully interrupts the scan, saving all partial results processed so far.
+    The Run status will be updated to "stopped" and partial results will be available.
+
+    **Status Codes**:
+    - 200: Stop request successful, scan will terminate
+    - 409: Scan already completed/stopped/failed
+    - 404: Run ID not found
+
+    Args:
+        run_id: Unique run identifier
+        db: Database session
+
+    Returns:
+        Dict with message and status
+    """
+    import uuid
+
+    from src.scanner.engine import request_interrupt
+
+    # Convert string to UUID
+    try:
+        run_uuid = uuid.UUID(run_id)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid UUID format: {run_id}",
+        ) from e
+
+    # Check if run exists
+    run = db.query(Run).filter(Run.run_id == run_uuid).first()
+
+    if not run:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Scan run '{run_id}' not found",
+        )
+
+    # Check if scan is still running
+    if run.status != RunStatus.RUNNING.value:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Cannot stop scan - status is '{run.status}' (must be 'running')",
+        )
+
+    # Request interrupt
+    interrupted = request_interrupt(run_id)
+
+    if not interrupted:
+        # Run was in database as running but not found in interrupt flags
+        # This can happen if the scan just finished
+        logger.warning("Interrupt requested but run_id not found in active scans", run_id=run_id)
+        raise HTTPException(
+            status_code=409,
+            detail="Scan may have already completed - refresh status",
+        )
+
+    logger.info(
+        "Scan stop requested",
+        run_id=run_id,
+        strategy=run.strategy,
+        tickers_processed=run.tickers_processed or 0,
+    )
+
+    return {
+        "message": "Scan stop requested - partial results will be saved",
+        "run_id": run_id,
+        "status": "stopping",
+    }

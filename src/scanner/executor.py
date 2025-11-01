@@ -69,6 +69,7 @@ class ConcurrentExecutor:
         tickers: list[str],
         asof: date | None = None,
         progress_callback: Callable[[int, int, str, Any], None] | None = None,
+        run_id: str | None = None,
     ) -> tuple[list[PipelineResult], ExecutorStats]:
         """Execute pipeline on list of tickers concurrently.
 
@@ -76,6 +77,7 @@ class ConcurrentExecutor:
             tickers: List of ticker symbols to process
             asof: Date to process (defaults to today)
             progress_callback: Optional callback(completed, total, ticker, result)
+            run_id: Optional run ID for interrupt checking
 
         Returns:
             Tuple of (results list, execution statistics)
@@ -84,6 +86,7 @@ class ConcurrentExecutor:
         results: list[PipelineResult] = []
         failed = 0
         timed_out = 0
+        interrupted = False
 
         self.logger.info(
             "Starting concurrent execution",
@@ -96,11 +99,23 @@ class ConcurrentExecutor:
 
         # Process in batches for memory management
         for batch_start in range(0, len(tickers), self.config.batch_size):
+            # Check for interrupt before starting new batch
+            if run_id:
+                from src.scanner.engine import is_interrupted
+
+                if is_interrupted(run_id):
+                    self.logger.info(
+                        "Scan interrupted by user",
+                        extra={"run_id": run_id, "tickers_processed": len(results)},
+                    )
+                    interrupted = True
+                    break
+
             batch_end = min(batch_start + self.config.batch_size, len(tickers))
             batch = tickers[batch_start:batch_end]
 
             batch_results, batch_failed, batch_timed_out = self._process_batch(
-                batch, asof, progress_callback, batch_start
+                batch, asof, progress_callback, batch_start, run_id
             )
 
             results.extend(batch_results)
@@ -118,17 +133,30 @@ class ConcurrentExecutor:
             tickers_per_second=len(results) / duration if duration > 0 else 0,
         )
 
-        self.logger.info(
-            "Concurrent execution complete",
-            extra={
-                "total": stats.total_tickers,
-                "processed": stats.processed,
-                "failed": stats.failed,
-                "timed_out": stats.timed_out,
-                "duration_sec": f"{stats.duration_seconds:.2f}",
-                "tickers_per_sec": f"{stats.tickers_per_second:.2f}",
-            },
-        )
+        if interrupted:
+            self.logger.info(
+                "Concurrent execution stopped (interrupted)",
+                extra={
+                    "total": stats.total_tickers,
+                    "processed": stats.processed,
+                    "failed": stats.failed,
+                    "timed_out": stats.timed_out,
+                    "duration_sec": f"{stats.duration_seconds:.2f}",
+                    "tickers_per_sec": f"{stats.tickers_per_second:.2f}",
+                },
+            )
+        else:
+            self.logger.info(
+                "Concurrent execution complete",
+                extra={
+                    "total": stats.total_tickers,
+                    "processed": stats.processed,
+                    "failed": stats.failed,
+                    "timed_out": stats.timed_out,
+                    "duration_sec": f"{stats.duration_seconds:.2f}",
+                    "tickers_per_sec": f"{stats.tickers_per_second:.2f}",
+                },
+            )
 
         return results, stats
 
@@ -138,6 +166,7 @@ class ConcurrentExecutor:
         asof: date | None,
         progress_callback: Callable[[int, int, str, Any], None] | None,
         offset: int,
+        run_id: str | None = None,
     ) -> tuple[list[PipelineResult], int, int]:
         """Process a batch of tickers concurrently.
 
@@ -146,6 +175,7 @@ class ConcurrentExecutor:
             asof: Date to process
             progress_callback: Progress callback(completed, total, ticker, result)
             offset: Offset for progress reporting
+            run_id: Optional run ID for interrupt checking
 
         Returns:
             Tuple of (results, failed_count, timeout_count)
@@ -165,6 +195,16 @@ class ConcurrentExecutor:
             for future in as_completed(
                 future_to_ticker, timeout=self.config.timeout_seconds * len(batch)
             ):
+                # Check for interrupt before processing next result
+                if run_id:
+                    from src.scanner.engine import is_interrupted
+
+                    if is_interrupted(run_id):
+                        # Cancel remaining futures
+                        for f in future_to_ticker:
+                            f.cancel()
+                        break
+
                 ticker = future_to_ticker[future]
 
                 try:

@@ -1,0 +1,42 @@
+name: reddit
+version: 1.0.0
+description: "Reddit sentiment-based candidate selection across multiple stock subreddits"
+parameters:
+  sentiment_threshold: 0.5
+  top_n: 20
+  # List of subreddits to scan (in priority order)
+  subreddits:
+    - wallstreetbets # 24.8K - Highest activity, meme stocks
+    - stocks # 811 - More fundamental discussion
+    - investing # 547 - Long-term focused
+    - StockMarket # 251 - General market discussion
+    - options # 304 - Options trading
+    - Daytrading # 298 - Day trading focused
+    - WSBElite # 273 - WSB alternative
+    - Shortsqueeze # 237 - Short squeeze plays
+    - WSBnew # 173 - WSB alternative
+    - SqueezePlays # 147 - Squeeze focused
+    - SPACs # 78 - SPAC focused
+  posts_per_subreddit: 50 # Fetch 50 posts from each subreddit
+  min_mentions: 2 # Back to 2 - more open-minded
+  min_confidence: 0.5 # Lowered from 0.6 - more open-minded
+  min_comment_score: 0 # Analyze ALL comments regardless of score
+  require_catalysts: false # Don't require catalysts - let people dictate
+  cross_subreddit_boost: 0.1 # Boost score if mentioned in multiple subs
+
+  # NEW: Balanced scoring configuration (Task 6.3)
+  sentiment_analysis:
+    model: "gpt-4o-mini"
+    temperature: 0.3 # Lower for more consistent scoring
+    max_tokens: 500
+
+    # Scoring weights (must sum to 1.0)
+    scoring_weights:
+      fundamentals: 0.3 # Current business health
+      potential: 0.4 # Future opportunity (weighted highest)
+      conviction: 0.3 # Research quality
+
+    min_conviction_threshold: 0.3 # Ignore pure hype (conviction < 0.3)
+    potential_boost_threshold: 0.7 # High-potential plays get extra consideration
+
+enabled: true

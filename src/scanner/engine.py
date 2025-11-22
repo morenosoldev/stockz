@@ -181,7 +181,12 @@ class ScanEngine:
             if hasattr(strategy, "provides_own_universe") and strategy.provides_own_universe:  # type: ignore[attr-defined]
                 # Strategy discovers its own tickers (e.g., from Reddit, news, etc.)
                 if hasattr(strategy, "get_universe"):
-                    universe = strategy.get_universe(asof)  # type: ignore[attr-defined]
+                    # Pass run_id if strategy supports cooperative interruption during universe discovery
+                    try:  # type: ignore[attr-defined]
+                        universe = strategy.get_universe(asof, run_id=run_id)  # type: ignore[arg-type]
+                    except TypeError:
+                        # Fallback to legacy signature without run_id
+                        universe = strategy.get_universe(asof)  # type: ignore[attr-defined]
                     self.logger.info(
                         f"Strategy '{strategy.name}' using custom universe",
                         extra={

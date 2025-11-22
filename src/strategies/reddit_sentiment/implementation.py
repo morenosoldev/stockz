@@ -160,7 +160,7 @@ class RedditSentimentStrategy(BaseStrategy):
             self._technical_analyzer = TechnicalAnalyzer()
         return self._technical_analyzer
 
-    def _refresh_sentiment_data(self, asof: date) -> None:
+    def _refresh_sentiment_data(self, asof: date, run_id: str | None = None) -> None:
         """Refresh sentiment data from multiple Reddit subreddits (called once per scan).
 
         Args:
@@ -186,7 +186,24 @@ class RedditSentimentStrategy(BaseStrategy):
         all_posts = []
         subreddit_mentions: dict[str, set[str]] = {}  # Track which subreddits mentioned each ticker
 
+        from src.scanner.engine import is_interrupted
+
+        # Cooperative interrupt before starting expensive network calls
+        if run_id and is_interrupted(run_id):
+            logger.info(
+                "⏹️ Scan interrupted before subreddit fetch phase",
+                run_id=run_id,
+            )
+            return
+
         for subreddit in self.subreddits:
+            if run_id and is_interrupted(run_id):
+                logger.info(
+                    "⏹️ Scan interrupted during subreddit iteration",
+                    run_id=run_id,
+                    subreddit=subreddit,
+                )
+                break
             try:
                 logger.info(f"  📥 Fetching from r/{subreddit}...", subreddit=subreddit)
 
@@ -227,10 +244,18 @@ class RedditSentimentStrategy(BaseStrategy):
 
         logger.info("🤖 Analyzing sentiment for tickers mentioned in posts and comments...")
 
-        # Analyze sentiment (including comments)
-        sentiment_results = self.sentiment_analyzer.analyze_batch(
-            all_posts, analyze_comments=True, min_comment_score=self.min_comment_score
-        )
+        # Analyze sentiment (including comments) unless interrupted
+        if run_id and is_interrupted(run_id):
+            logger.info(
+                "⏹️ Scan interrupted before sentiment analysis phase",
+                run_id=run_id,
+                posts=len(all_posts),
+            )
+            sentiment_results = {}
+        else:
+            sentiment_results = self.sentiment_analyzer.analyze_batch(
+                all_posts, analyze_comments=True, min_comment_score=self.min_comment_score
+            )
 
         logger.info(
             f"✅ Sentiment analysis complete - found {len(sentiment_results)} ticker mentions",
@@ -298,19 +323,31 @@ class RedditSentimentStrategy(BaseStrategy):
 
         # Run deep research if enabled
         if self.research_enabled:
-            logger.info(
-                "🔬 Starting deep research pipeline for top candidates...",
-                candidates_count=len(aggregated),
-            )
-            self._run_deep_research(aggregated, all_posts)
+            if run_id and is_interrupted(run_id):
+                logger.info(
+                    "⏹️ Scan interrupted before deep research pipeline",
+                    run_id=run_id,
+                )
+            else:
+                logger.info(
+                    "🔬 Starting deep research pipeline for top candidates...",
+                    candidates_count=len(aggregated),
+                )
+                self._run_deep_research(aggregated, all_posts, run_id=run_id)
 
         # Run technical analysis if enabled
         if self.technical_analysis_enabled:
-            logger.info(
-                "📊 Starting technical analysis for top candidates...",
-                candidates_count=len(aggregated),
-            )
-            self._run_technical_analysis(aggregated, asof)
+            if run_id and is_interrupted(run_id):
+                logger.info(
+                    "⏹️ Scan interrupted before technical analysis pipeline",
+                    run_id=run_id,
+                )
+            else:
+                logger.info(
+                    "📊 Starting technical analysis for top candidates...",
+                    candidates_count=len(aggregated),
+                )
+                self._run_technical_analysis(aggregated, asof, run_id=run_id)
 
         qualifying_tickers = list(self._sentiment_cache.keys())
         ticker_list = ", ".join(qualifying_tickers[:10])
@@ -324,7 +361,10 @@ class RedditSentimentStrategy(BaseStrategy):
         )
 
     def _run_deep_research(
-        self, candidates: list[dict[str, Any]], all_posts: list[dict[str, Any]]
+        self,
+        candidates: list[dict[str, Any]],
+        all_posts: list[dict[str, Any]],
+        run_id: str | None = None,
     ) -> None:
         """Run deep research pipeline for candidates.
 
@@ -335,7 +375,16 @@ class RedditSentimentStrategy(BaseStrategy):
             candidates: List of candidate dicts with ticker, weighted_score, etc.
             all_posts: All Reddit posts with comments
         """
+        from src.scanner.engine import is_interrupted
+
         for candidate in candidates:
+            if run_id and is_interrupted(run_id):
+                logger.info(
+                    "⏹️ Scan interrupted during deep research loop",
+                    run_id=run_id,
+                    remaining=len(candidates),
+                )
+                break
             ticker = candidate["ticker"]
             logger.info(f"  🔎 Researching {ticker}...", ticker=ticker)
 
@@ -488,7 +537,12 @@ class RedditSentimentStrategy(BaseStrategy):
                 # Continue with other tickers even if one fails
                 continue
 
-    def _run_technical_analysis(self, candidates: list[dict[str, Any]], asof: date) -> None:
+    def _run_technical_analysis(
+        self,
+        candidates: list[dict[str, Any]],
+        asof: date,
+        run_id: str | None = None,
+    ) -> None:
         """Run technical analysis for candidates.
 
         Fetches OHLCV data, calculates technical indicators, and uses GPT-4
@@ -498,7 +552,16 @@ class RedditSentimentStrategy(BaseStrategy):
             candidates: List of candidate dicts with ticker, weighted_score, etc.
             asof: Analysis date
         """
+        from src.scanner.engine import is_interrupted
+
         for candidate in candidates:
+            if run_id and is_interrupted(run_id):
+                logger.info(
+                    "⏹️ Scan interrupted during technical analysis loop",
+                    run_id=run_id,
+                    remaining=len(candidates),
+                )
+                break
             ticker = candidate["ticker"]
             logger.info(f"  📈 Analyzing {ticker} technical data...", ticker=ticker)
 
@@ -605,7 +668,7 @@ class RedditSentimentStrategy(BaseStrategy):
         # Check if ticker is in Reddit sentiment cache
         return symbol in self._sentiment_cache
 
-    def get_universe(self, asof: date) -> list[str]:
+    def get_universe(self, asof: date, run_id: str | None = None) -> list[str]:
         """Get custom universe of tickers mentioned on Reddit.
 
         This method is called by the scanner when provides_own_universe=True.
@@ -618,7 +681,7 @@ class RedditSentimentStrategy(BaseStrategy):
             List of ticker symbols mentioned on Reddit with positive sentiment
         """
         # Refresh sentiment data (fetches Reddit posts if cache stale)
-        self._refresh_sentiment_data(asof)
+        self._refresh_sentiment_data(asof, run_id=run_id)
 
         # Return only tickers in the cache (already filtered by sentiment)
         return list(self._sentiment_cache.keys())

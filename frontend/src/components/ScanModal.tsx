@@ -1,10 +1,26 @@
 import { useRef } from "react";
-import { X, Loader2, CheckCircle, XCircle, Activity } from "lucide-react";
+import {
+  X,
+  Loader2,
+  CheckCircle,
+  XCircle,
+  Activity,
+  StopCircle,
+} from "lucide-react";
 import { useScanStore } from "@/stores/scanStore";
 import { useScanLogs } from "@/hooks/useScanLogs";
 
 export function ScanModal() {
-  const { isOpen, runId, logs, stats, closeModal, reset } = useScanStore();
+  const {
+    isOpen,
+    runId,
+    logs,
+    stats,
+    isStopping,
+    closeModal,
+    stopScan,
+    reset,
+  } = useScanStore();
   const logsEndRef = useRef<HTMLDivElement>(null);
 
   // SSE connection for streaming logs
@@ -28,6 +44,7 @@ export function ScanModal() {
   const isRunning = stats?.status === "running";
   const isCompleted = stats?.status === "completed";
   const isFailed = stats?.status === "failed";
+  const isStopped = stats?.status === "stopped";
   const progress = stats?.totalTickers
     ? (stats.tickersProcessed / stats.totalTickers) * 100
     : 0;
@@ -49,11 +66,14 @@ export function ScanModal() {
                 <CheckCircle className="w-6 h-6 text-success-500" />
               )}
               {isFailed && <XCircle className="w-6 h-6 text-error-500" />}
+              {isStopped && <StopCircle className="w-6 h-6 text-warning-500" />}
               <div>
                 <h2 className="text-2xl font-bold text-gray-900 dark:text-white">
-                  {isRunning && "Scanning Market..."}
+                  {isRunning &&
+                    (isStopping ? "Stopping Scan..." : "Scanning Market...")}
                   {isCompleted && "Scan Complete!"}
                   {isFailed && "Scan Failed"}
+                  {isStopped && "Scan Stopped"}
                 </h2>
                 {runId && (
                   <p className="text-sm text-gray-500 dark:text-gray-400 font-mono">
@@ -93,6 +113,8 @@ export function ScanModal() {
                       ? "bg-success-500"
                       : isFailed
                       ? "bg-error-500"
+                      : isStopped
+                      ? "bg-warning-500"
                       : "bg-primary-500"
                   }`}
                   style={{ width: `${Math.min(progress, 100)}%` }}
@@ -175,22 +197,37 @@ export function ScanModal() {
         <div className="border-t border-gray-200 dark:border-gray-800 p-4 bg-gray-50 dark:bg-gray-800">
           <div className="flex items-center justify-between">
             <div className="text-sm text-gray-600 dark:text-gray-400">
-              {isRunning && "Scan in progress..."}
+              {isRunning && !isStopping && "Scan in progress..."}
+              {isRunning && isStopping && "Stopping scan gracefully..."}
               {isCompleted &&
                 `Found ${
                   stats?.candidatesFound || 0
                 } candidates! Review the logs above.`}
               {isFailed && "Scan failed. Check logs for details."}
+              {isStopped &&
+                "Scan was stopped by user. Partial results available."}
             </div>
-            <button
-              onClick={() => {
-                closeModal();
-                reset();
-              }}
-              className="px-4 py-2 bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors"
-            >
-              {isRunning ? "Minimize" : "Close"}
-            </button>
+            <div className="flex gap-2">
+              {isRunning && !isStopping && (
+                <button
+                  onClick={stopScan}
+                  className="px-4 py-2 bg-error-500 hover:bg-error-600 text-white rounded-lg transition-colors flex items-center gap-2"
+                >
+                  <StopCircle className="w-4 h-4" />
+                  Stop Scan
+                </button>
+              )}
+              <button
+                onClick={() => {
+                  closeModal();
+                  reset();
+                }}
+                className="px-4 py-2 bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors"
+                disabled={isRunning && !isStopping}
+              >
+                {isRunning ? "Minimize" : "Close"}
+              </button>
+            </div>
           </div>
         </div>
       </div>

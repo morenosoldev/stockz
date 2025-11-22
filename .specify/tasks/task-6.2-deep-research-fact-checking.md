@@ -55,10 +55,11 @@ Implement a multi-stage research pipeline that fact-checks claims made in Reddit
     ```
 
 - [ ] Create `src/research/fact_checker.py`:
-  - **Verify claims** against reliable sources:
-    - **Yahoo Finance News API**: Search for recent news mentioning claim keywords
-    - **SEC Edgar API**: Check recent 8-K filings for material events
-    - **Company Press Releases**: Scrape investor relations pages (optional)
+  - **Verify claims** using AI-powered internet research:
+    - **LLM with Web Search**: Use chatbot (GPT-4 with web browsing/search capability) to research claims
+    - Chatbot autonomously searches the web, reads articles, and synthesizes findings
+    - No API restrictions - can access any public web source
+    - Gets latest news, press releases, SEC filings, analyst reports, etc.
   - Return fact-check results:
     ```python
     @dataclass
@@ -71,36 +72,36 @@ Implement a multi-stage research pipeline that fact-checks claims made in Reddit
         checked_at: datetime
     ```
   - **Verification logic**:
-    - Search Yahoo Finance news for ticker + claim keywords
-    - If found within 30 days → verified=True, confidence=0.8+
-    - Check SEC filings (8-K) for matching events
-    - If not found → verified=False, confidence based on search exhaustiveness
-- [ ] Add LLM-based claim verification (fallback):
-  - Use GPT-4 to assess claim plausibility
-  - Prompt: "Is this claim about {ticker} plausible based on recent news? Provide confidence 0-1."
-  - Only use if no hard evidence found in APIs
+    - Send claim to chatbot with research prompt
+    - Chatbot searches web autonomously (Google, news sites, company sites, etc.)
+    - Chatbot reads relevant articles and synthesizes evidence
+    - Returns structured response with sources and confidence
+    - If chatbot can't find evidence → verified=False
+- [ ] Add structured research prompt for chatbot:
+  - Prompt: "Research this claim about {ticker}: '{claim_text}'. Search the web for recent news, press releases, SEC filings, or other reliable sources. Return: 1) Is it verified (true/false), 2) Confidence (0-1), 3) Evidence summary, 4) Source URLs."
+  - Use function calling/structured output for consistent results
 
 ### Phase 2: Company Intelligence Gathering
 
 - [ ] Create `src/datasources/company.py`:
-  - **Financial Metrics** (Yahoo Finance):
-    - Market cap, P/E ratio, revenue, earnings (TTM)
-    - Revenue growth YoY, earnings growth YoY
-    - Debt-to-equity ratio, current ratio
-    - Profit margin, ROE
-  - **Company Profile**:
-    - Description, sector, industry
-    - Number of employees, headquarters location
-    - Website, founded year
-  - **Analyst Data**:
-    - Average analyst rating (buy/hold/sell)
-    - Price target (consensus)
-    - Number of analysts covering
-  - **Recent Events** (last 30 days):
-    - Earnings dates (past and upcoming)
-    - Dividend announcements
-    - Stock splits
-    - Insider trades (large buys/sells)
+  - **Use chatbot for comprehensive company research** instead of APIs
+  - **Chatbot-driven research**:
+    - Send research request to chatbot: "Research {ticker} company. Provide: 1) Financial metrics (market cap, P/E, revenue growth, etc.), 2) Recent news/events (last 30 days), 3) Analyst ratings, 4) Company description and fundamentals"
+    - Chatbot autonomously searches and aggregates data from multiple sources
+    - No API restrictions - can access Yahoo Finance, Google Finance, company websites, news sites, analyst reports, etc.
+  - Return structured company data:
+    ```python
+    @dataclass
+    class CompanyData:
+        ticker: str
+        financials: dict  # market_cap, pe_ratio, revenue_growth, etc.
+        profile: dict  # description, sector, industry, etc.
+        analyst_data: dict  # rating, price_target, analyst_count
+        recent_events: list[dict]  # earnings, dividends, insider trades, etc.
+        research_summary: str  # Chatbot's synthesized findings
+        sources: list[str]  # URLs chatbot used
+        confidence: float  # 0-1, how confident chatbot is in data quality
+    ```
 - [ ] Add caching with 24-hour TTL:
   - Company fundamentals change slowly
   - Cache key: `company_data:{ticker}:{date}`
@@ -260,15 +261,17 @@ Implement a multi-stage research pipeline that fact-checks claims made in Reddit
 
 - [ ] Unit tests for fact checking:
 
-  - Mock Yahoo Finance API responses
-  - Test verification logic
+  - Mock chatbot responses for verification
+  - Test verification logic with various claim types
   - Test confidence scoring
+  - Test error handling (chatbot timeout, API failures)
 
 - [ ] Integration tests for company data:
 
-  - Real API calls to Yahoo Finance (like price adapter)
+  - Real chatbot calls for company research
   - Test caching behavior
-  - Test error handling (delisted stocks, etc.)
+  - Test error handling (delisted stocks, chatbot failures)
+  - Verify data quality and completeness
 
 - [ ] End-to-end test with real Reddit data:
   - Find real Reddit post with verifiable claims
@@ -345,14 +348,17 @@ python scripts/one_shot_scan.py --strategy reddit_sentiment --research-enabled
   - `analyze_narrative(claims, comments) -> NarrativeConsensus` (extract themes)
   - Uses OpenAI GPT-4o-mini with structured output
   - Parallel processing with ThreadPoolExecutor
-- [ ] `src/research/fact_checker.py` (250 lines) - Increased for more claims
+- [ ] `src/research/fact_checker.py` (300 lines) - Increased for chatbot integration
   - `fact_check_claims(claims) -> list[FactCheckResult]`
   - `rank_claims_by_impact(claims) -> list[Claim]` (sort by score × confidence)
-  - Yahoo Finance news search
-  - SEC Edgar API integration (optional)
-- [ ] `src/datasources/company.py` (300 lines)
+  - `research_claim_with_chatbot(claim) -> FactCheckResult`
+  - Chatbot web research integration (GPT-4, Perplexity, or LangChain)
+  - Error handling and retry logic for chatbot failures
+- [ ] `src/datasources/company.py` (350 lines) - Increased for chatbot research
   - `CompanyAdapter` class (inherits from `BaseDataAdapter`)
   - `get_company_data(ticker) -> CompanyData`
+  - `research_company_with_chatbot(ticker) -> CompanyData`
+  - Chatbot integration for autonomous company research
   - Caching with 24h TTL
 
 ### Backend - Integration
@@ -460,33 +466,40 @@ def extract_claims_from_batch(comments: list[dict], ticker: str) -> list[Claim]:
 
 ### Fact Checking Strategy
 
-1. **Yahoo Finance News Search**:
+1. **Chatbot Web Research**:
 
    ```python
-   # Search for news matching claim keywords
-   url = f"https://query2.finance.yahoo.com/v1/finance/search"
-   params = {
-       "q": f"{ticker} {claim_keywords}",
-       "newsCount": 10
-   }
-   # Check if any results published within 30 days
-   # Extract matching articles as evidence
+   # Send claim to chatbot for autonomous research
+   research_prompt = f"""
+   Research this claim about {ticker}: "{claim_text}"
+
+   Instructions:
+   1. Search the web for recent news, press releases, SEC filings, analyst reports
+   2. Look for evidence from the last 30 days (or specify timeframe if claim mentions dates)
+   3. Verify if the claim is true, false, or unverifiable
+   4. Provide confidence level (0-1) based on source quality and evidence strength
+
+   Return structured JSON:
+   {{
+     "verified": true/false,
+     "confidence": 0.0-1.0,
+     "evidence": "Brief summary of what you found",
+     "sources": ["url1", "url2", ...],
+     "search_queries_used": ["query1", "query2"]
+   }}
+   """
+
+   # Call chatbot with web search enabled (e.g., GPT-4 with browsing, Perplexity API, etc.)
+   result = chatbot.research(research_prompt)
    ```
 
-2. **SEC Edgar API** (optional, for material events):
-
-   ```python
-   # Check recent 8-K filings
-   url = f"https://data.sec.gov/submissions/CIK{cik}.json"
-   # Parse recent filings for matching events
-   ```
-
-3. **Confidence Scoring**:
-   - Found in Yahoo Finance news (within 7 days): confidence = 0.9
-   - Found in Yahoo Finance news (within 30 days): confidence = 0.7
-   - Found in SEC filing: confidence = 0.95
-   - Found via LLM plausibility check only: confidence = 0.3-0.6
-   - Not found anywhere: confidence = 0.8-0.95 (high confidence it's false)
+2. **Confidence Scoring Guidelines for Chatbot**:
+   - Found in official press release or SEC filing: confidence = 0.95
+   - Found in multiple reputable news sources (within 7 days): confidence = 0.9
+   - Found in single reputable news source (within 30 days): confidence = 0.7-0.8
+   - Found via analyst reports or industry publications: confidence = 0.6-0.7
+   - Can't find any evidence after thorough search: confidence = 0.85-0.95 (high confidence it's false)
+   - Found contradicting evidence: confidence = 0.9-0.95 (it's debunked)
 
 ### Company Data Caching
 
@@ -496,8 +509,28 @@ cache_key = f"company_data:{ticker}:{date.today()}"
 ttl_seconds = 86400  # 24 hours
 
 # If cached, return immediately
-# Otherwise fetch from Yahoo Finance and cache
+# Otherwise send research request to chatbot and cache results
 ```
+
+### Chatbot Integration Options
+
+**Option A: OpenAI GPT-4 with Function Calling** (Recommended)
+
+- Use GPT-4 with web browsing capability
+- Define research functions for claims and company data
+- Structured output ensures consistent results
+
+**Option B: Perplexity API**
+
+- Purpose-built for web research with citations
+- Returns sources automatically
+- Simpler integration than GPT-4 browsing
+
+**Option C: LangChain Agent with Web Search**
+
+- Use LangChain agent with Tavily/SerpAPI for web search
+- Agent autonomously decides what to search
+- More control over search process
 
 ---
 
@@ -527,9 +560,10 @@ ttl_seconds = 86400  # 24 hours
 
 5. **API rate limits hit during research**
 
-   - Implement exponential backoff retry
-   - Cache aggressively to reduce API calls
+   - Implement exponential backoff retry for chatbot calls
+   - Cache aggressively to reduce chatbot API usage
    - Fall back to partial research if timeout exceeded
+   - Consider using multiple chatbot providers for redundancy
 
 6. **Many similar claims from multiple comments**
 

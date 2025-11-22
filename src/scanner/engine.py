@@ -277,8 +277,9 @@ class ScanEngine:
         run_id = run_id or str(uuid.uuid4())
         start_time = datetime.now(UTC)
 
-        # Initialize interrupt flag for this run
-        _interrupt_flags[run_id] = threading.Event()
+        # Initialize interrupt flag for this run (if not already registered)
+        if run_id not in _interrupt_flags:
+            _interrupt_flags[run_id] = threading.Event()
 
         # run_id context already bound before get_universe() call
         # No need to bind again here

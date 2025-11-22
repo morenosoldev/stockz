@@ -431,6 +431,19 @@ async def trigger_scan(
         },
     )
 
+    # Pre-register interrupt flags so scans can be stopped immediately
+    import threading
+
+    from src.scanner.engine import _interrupt_flags
+
+    for run_id in run_ids:
+        _interrupt_flags[run_id] = threading.Event()
+
+    logger.debug(
+        "Registered interrupt flags for scans",
+        extra={"run_ids": run_ids},
+    )
+
     # Queue background task
     background_tasks.add_task(
         execute_scan_task,

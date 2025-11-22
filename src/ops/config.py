@@ -175,16 +175,20 @@ class DataSourceConfig(BaseSettings):
 
     # Price data provider
     price_provider: str = Field(
-        default="yahoo_finance",
-        description="Price data provider (yahoo_finance, alpha_vantage)",
+        default="twelve_data",
+        description="Price data provider (twelve_data, yahoo_finance, alpha_vantage)",
+    )
+    twelve_data_api_key: str | None = Field(
+        default=None,
+        description="Twelve Data API key",
     )
     yahoo_finance_api_key: str | None = Field(
         default=None,
-        description="Yahoo Finance API key (optional)",
+        description="Yahoo Finance API key (optional, fallback)",
     )
     alpha_vantage_api_key: str | None = Field(
         default=None,
-        description="Alpha Vantage API key",
+        description="Alpha Vantage API key (optional, alternative)",
     )
 
     # News data
@@ -233,7 +237,7 @@ class DataSourceConfig(BaseSettings):
     @classmethod
     def validate_provider(cls, v: str) -> str:
         """Validate price data provider."""
-        valid_providers = ["yahoo_finance", "alpha_vantage"]
+        valid_providers = ["twelve_data", "yahoo_finance", "alpha_vantage"]
         if v not in valid_providers:
             raise ValueError(f"Invalid provider. Must be one of: {valid_providers}")
         return v
@@ -341,6 +345,38 @@ class APIConfig(BaseSettings):
         return []
 
 
+class LLMConfig(BaseSettings):
+    """LLM configuration for research and fact-checking."""
+
+    openai_api_key: str = Field(
+        default="",
+        description="OpenAI API key for GPT models",
+    )
+    model_claim_extractor: str = Field(
+        default="gpt-4o-mini",
+        description="Model for claim extraction (cost-effective)",
+    )
+    model_fact_checker: str = Field(
+        default="gpt-4o",
+        description="Model for fact-checking and research (better reasoning)",
+    )
+    max_retries: int = Field(default=3, description="Max retries for LLM calls", ge=1, le=10)
+    timeout_seconds: int = Field(
+        default=30,
+        description="Timeout for LLM calls in seconds",
+        ge=5,
+        le=120,
+    )
+
+    model_config = SettingsConfigDict(
+        env_prefix="LLM_",
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+        protected_namespaces=(),  # Disable model_ prefix warning
+    )
+
+
 class Config(BaseSettings):
     """Main configuration aggregator."""
 
@@ -353,6 +389,7 @@ class Config(BaseSettings):
     features: FeatureConfig = Field(default_factory=FeatureConfig)
     evaluation: EvaluationConfig = Field(default_factory=EvaluationConfig)
     api: APIConfig = Field(default_factory=APIConfig)
+    llm: LLMConfig = Field(default_factory=LLMConfig)
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -369,6 +406,12 @@ class Config(BaseSettings):
         with open(yaml_path) as f:
             data = yaml.safe_load(f) or {}
 
+        # Prepare LLM config data, removing empty/null API key so env var takes precedence
+        llm_data = data.get("llm", {})
+        if "openai_api_key" in llm_data and not llm_data["openai_api_key"]:
+            # Remove empty/null api_key so Pydantic reads from LLM_OPENAI_API_KEY env var
+            llm_data = {k: v for k, v in llm_data.items() if k != "openai_api_key"}
+
         # Create nested config objects
         return cls(
             app=AppConfig(**data.get("app", {})),
@@ -380,6 +423,7 @@ class Config(BaseSettings):
             features=FeatureConfig(**data.get("features", {})),
             evaluation=EvaluationConfig(**data.get("evaluation", {})),
             api=APIConfig(**data.get("api", {})),
+            llm=LLMConfig(**llm_data),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -412,6 +456,10 @@ class Config(BaseSettings):
             "features": self.features.model_dump(),
             "evaluation": self.evaluation.model_dump(),
             "api": self.api.model_dump(),
+            "llm": {
+                **self.llm.model_dump(),
+                "openai_api_key": "***REDACTED***" if self.llm.openai_api_key else None,
+            },
         }
 
 

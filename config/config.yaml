@@ -55,7 +55,21 @@ scanner:
 # Data Sources
 # ------------------------------------------------------------------------------
 datasources:
-  price_provider: "yahoo_finance" # yahoo_finance or alpha_vantage
+  price_provider: "twelve_data" # twelve_data, yahoo_finance, or alpha_vantage
+
+  # Twelve Data configuration (Primary data provider)
+  twelve_data:
+    api_key: null # Set via TWELVE_DATA_API_KEY environment variable
+    plan: "basic" # basic (8/min, 8k/day) or grow (8/sec, 55k/day)
+    rate_limit:
+      calls_per_minute: 8 # Basic plan: 8 API credits/minute
+      daily_limit: 8000 # Basic plan: 8,000 API credits/day
+      delay_between_calls: 7.5 # Seconds between calls (8/min = 7.5s)
+    cache_ttl_seconds: 3600 # 1 hour cache (reduce API usage)
+    timeout_seconds: 30
+    retry_attempts: 3
+    retry_backoff: 2.0 # Exponential backoff multiplier
+
   yahoo_finance_api_key: null # Optional (uses public API if null)
   alpha_vantage_api_key: null # Required if using alpha_vantage
   news_api_key: null # Required for news sentiment features
@@ -68,6 +82,43 @@ datasources:
     ttl_seconds: 3600 # Default TTL (1 hour)
     use_compression: false # Compression support (future feature)
     auto_cleanup: true # Automatically clean expired entries
+
+  # Reddit adapter configuration
+  reddit:
+    # Ticker validation blacklist (extensible via config)
+    ticker_blacklist:
+      # Enable config-based blacklist (merges with built-in blacklist)
+      enabled: true
+      # Additional custom words to blacklist (supplements built-in list)
+      custom_words:
+        - "MOON"
+        - "GAINS"
+        - "LOSS"
+        # Add more as needed
+
+    # AI-powered company detection settings
+    company_detection:
+      # Enable AI pipeline (NER → LLM → yfinance)
+      enabled: true
+      # Use spaCy NER for company name detection
+      use_ner: true
+      # Use LLM for ticker resolution
+      use_llm: true
+      # Validate all tickers via yfinance
+      validate_existence: true
+      # Log detailed AI pipeline steps (NER entities, LLM calls, cache hits)
+      verbose_logging: false
+
+    # Ticker validation settings
+    ticker_validation:
+      # Validate ticker formats before processing
+      enabled: true
+      # Support international tickers (e.g., GUBRA.CO, SAP.DE)
+      allow_exchange_suffixes: true
+      # Support share classes (e.g., BRK-B, GOOG-A)
+      allow_share_classes: true
+      # Reject pure numeric tickers (e.g., "2024", "123")
+      reject_numbers_only: true
 
 # ------------------------------------------------------------------------------
 # Strategy Configuration
@@ -104,3 +155,13 @@ api:
   cors_origins:
     - "http://localhost:3000"
     - "http://localhost:8000"
+
+# ------------------------------------------------------------------------------
+# LLM Configuration (for research pipeline)
+# ------------------------------------------------------------------------------
+llm:
+  openai_api_key: "" # Set via LLM_OPENAI_API_KEY environment variable
+  model_claim_extractor: "gpt-4o-mini" # Cost-effective model for claim extraction
+  model_fact_checker: "gpt-4o" # Better reasoning model for fact-checking and research
+  max_retries: 3
+  timeout_seconds: 30

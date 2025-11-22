@@ -7,6 +7,7 @@ confidence levels and reasoning.
 All sentiment analysis is cached to minimize API costs and latency.
 """
 
+import json
 from datetime import UTC, datetime
 from typing import Any
 
@@ -210,11 +211,20 @@ class SentimentAnalyzer(CachedDataAdapter):
         if self.cache_enabled:
             cached = self._get_from_cache(cache_key)
             if cached is not None:
-                logger.debug(
-                    "Sentiment fetched from cache",
-                    extra={"ticker": ticker},
-                )
-                return SentimentScore(**cached)
+                try:
+                    # Validate cached data has all required fields
+                    sentiment = SentimentScore(**cached)
+                    logger.debug(
+                        "Sentiment fetched from cache",
+                        extra={"ticker": ticker},
+                    )
+                    return sentiment
+                except Exception as e:
+                    # Cache data is stale/invalid (missing new fields), ignore it
+                    logger.debug(
+                        "Cached sentiment data is stale, will re-analyze",
+                        extra={"ticker": ticker, "error": str(e)},
+                    )
 
         # Call OpenAI API with structured outputs
         try:
@@ -347,6 +357,134 @@ IMPORTANT:
                 original_error=e,
             ) from e
 
+    def analyze_comments_batch(
+        self,
+        ticker: str,
+        post_title: str,
+        comments: list[dict[str, Any]],
+        batch_size: int = 10,
+    ) -> list[SentimentScore]:
+        """Analyze sentiment for multiple comments in a single batched LLM call.
+
+        This is ~10x more efficient than calling analyze_post() in a loop for comments.
+
+        Args:
+            ticker: Stock ticker symbol
+            post_title: Original post title (for context)
+            comments: List of comment dicts with 'body', 'score', 'id' keys
+            batch_size: Number of comments per LLM call (default: 10)
+
+        Returns:
+            List of SentimentScore objects (one per comment)
+
+        Example:
+            >>> comments = [{"body": "Great company!", "score": 50, "id": "abc123"}, ...]
+            >>> sentiments = analyzer.analyze_comments_batch("NVDA", "NVDA earnings", comments)
+        """
+        results: list[SentimentScore] = []
+
+        try:
+            # Process comments in batches
+            for i in range(0, len(comments), batch_size):
+                batch = comments[i : i + batch_size]
+
+                # Build batch input as JSON array
+                comments_data = []
+                for idx, comment in enumerate(batch):
+                    comments_data.append(
+                        {
+                            "index": i + idx,  # Global index for tracking
+                            "body": comment.get("body", "")[:500],  # Limit length
+                            "score": comment.get("score", 0),
+                        }
+                    )
+
+                comments_json = json.dumps(comments_data, indent=2)
+
+                prompt = f"""You are a growth-focused investment analyst analyzing Reddit comments about {ticker.upper()}.
+
+Post context: "{post_title}"
+
+Comments to analyze (JSON array):
+{comments_json}
+
+For EACH comment, analyze the sentiment toward {ticker.upper()} in the context of the post.
+
+Return a JSON array with one object per comment (same order), each containing:
+{{
+  "index": <comment_index>,
+  "ticker": "{ticker.upper()}",
+  "sentiment": "bullish" | "bearish" | "neutral",
+  "confidence": 0.0-1.0,
+  "score": -1.0 to +1.0,
+  "fundamentals_score": 0.0-1.0,
+  "potential_score": 0.0-1.0,
+  "conviction_score": 0.0-1.0,
+  "reasoning": "brief explanation",
+  "catalysts": ["catalyst1", "catalyst2"],
+  "risk_factors": ["risk1", "risk2"],
+  "growth_drivers": ["driver1", "driver2"]
+}}
+
+IMPORTANT: Return ONLY a JSON array with exactly {len(batch)} objects, no explanation."""
+
+                logger.debug(
+                    f"🤖 Analyzing {len(batch)} comments in batch for ${ticker}",
+                    extra={"ticker": ticker, "batch_size": len(batch)},
+                )
+
+                response = self.client.chat.completions.create(
+                    model=self.model,
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": "You are a growth-focused investment analyst. Return valid JSON only.",
+                        },
+                        {"role": "user", "content": prompt},
+                    ],
+                    response_format={"type": "json_object"},
+                    temperature=self.temperature,
+                    max_tokens=2000,  # More tokens for batch responses
+                )
+
+                result_text = response.choices[0].message.content
+                if not result_text:
+                    raise DataAdapterError(
+                        "LLM returned empty response for batch comment analysis",
+                        source=self.source,
+                    )
+
+                # Parse the JSON array response
+                batch_data = json.loads(result_text)
+
+                # Handle both array and object with "comments" key
+                if isinstance(batch_data, dict):
+                    batch_results = batch_data.get("comments", batch_data.get("results", []))
+                else:
+                    batch_results = batch_data
+
+                # Convert each result to SentimentScore
+                if batch_results:
+                    for comment_result in batch_results:
+                        try:
+                            sentiment = SentimentScore(**comment_result)
+                            results.append(sentiment)
+                        except Exception as e:
+                            logger.warning(
+                                f"Failed to parse comment sentiment: {e}",
+                                extra={"ticker": ticker, "error": str(e), "data": comment_result},
+                            )
+
+        except Exception as e:
+            logger.error(
+                f"Batch comment analysis failed for {ticker}: {e}",
+                extra={"ticker": ticker, "error": str(e), "comments_count": len(comments)},
+                exc_info=True,
+            )
+            # Fallback: return empty list, caller can retry individually if needed
+
+        return results
+
     def analyze_batch(
         self,
         posts: list[dict[str, Any]],
@@ -393,15 +531,31 @@ IMPORTANT:
         processed_count = 0
         total_sentiments = 0
         total_comments_analyzed = 0
+        total_posts = len(posts)
 
-        for post in posts:
+        for post_idx, post in enumerate(posts, 1):
             tickers = post.get("tickers", [])
 
             # Filter tickers if specified
             if tickers_filter:
                 tickers = [t for t in tickers if t in tickers_filter]
 
-            # Analyze sentiment for each ticker mentioned in the post
+            # Skip post if no relevant tickers
+            if not tickers:
+                continue
+
+            # Log progress for this post
+            logger.info(
+                f'📄 Analyzing post {post_idx}/{total_posts}: "{post.get("title", "")[:80]}{"..." if len(post.get("title", "")) > 80 else ""}"',
+                extra={
+                    "post_index": post_idx,
+                    "total_posts": total_posts,
+                    "post_id": post.get("id"),
+                    "tickers_in_post": tickers,
+                },
+            )
+
+            # Analyze post sentiment for each ticker
             for ticker in tickers:
                 try:
                     # Log progress for each ticker analysis
@@ -441,94 +595,93 @@ IMPORTANT:
                         source="post",
                     )
 
-                    # Analyze comments if enabled and available
-                    if analyze_comments and post.get("comments"):
-                        comments = post.get("comments", [])
-                        # Filter comments that mention the ticker AND have sufficient score
-                        relevant_comments = [
-                            c
-                            for c in comments
-                            if (
-                                ticker.upper() in c.get("body", "").upper()
-                                or f"${ticker.upper()}" in c.get("body", "")
-                            )
-                            and c.get("score", 0) >= min_comment_score
-                        ]
-
-                        if relevant_comments:
-                            logger.info(
-                                f"💬 Analyzing {len(relevant_comments)} comments mentioning ${ticker}...",
-                                ticker=ticker,
-                                comments_count=len(relevant_comments),
-                            )
-
-                            for idx, comment in enumerate(
-                                relevant_comments[:5], 1
-                            ):  # Limit to top 5 relevant comments per ticker
-                                try:
-                                    comment_body = comment.get("body", "")
-                                    comment_preview = (
-                                        comment_body[:150] + "..."
-                                        if len(comment_body) > 150
-                                        else comment_body
-                                    )
-
-                                    # Log the comment being analyzed
-                                    logger.info(
-                                        f'  💭 Comment {idx} (score: {comment.get("score", 0)}): "{comment_preview}"',
-                                        ticker=ticker,
-                                        comment_id=comment.get("id"),
-                                        comment_score=comment.get("score"),
-                                        comment_text=comment_body,
-                                    )
-
-                                    comment_sentiment = self.analyze_post(
-                                        ticker=ticker,
-                                        title=f"Comment on: {post.get('title', '')[:50]}...",
-                                        body=comment_body,
-                                        metadata={
-                                            "post_id": post.get("id"),
-                                            "comment_id": comment.get("id"),
-                                            "comment_score": comment.get("score"),
-                                            "is_comment": True,
-                                        },
-                                    )
-
-                                    results[ticker].append(comment_sentiment)
-                                    total_sentiments += 1
-                                    total_comments_analyzed += 1
-
-                                    comment_emoji = (
-                                        "📈"
-                                        if comment_sentiment.sentiment == "bullish"
-                                        else (
-                                            "📉"
-                                            if comment_sentiment.sentiment == "bearish"
-                                            else "➡️"
-                                        )
-                                    )
-                                    logger.info(
-                                        f"  {comment_emoji} ${ticker} Analysis: {comment_sentiment.sentiment.upper()} (score: {comment_sentiment.score:+.2f}, confidence: {comment_sentiment.confidence:.2f})",
-                                        ticker=ticker,
-                                        sentiment=comment_sentiment.sentiment,
-                                        score=comment_sentiment.score,
-                                        confidence=comment_sentiment.confidence,
-                                        source="comment",
-                                        reasoning=comment_sentiment.reasoning,
-                                    )
-                                except DataAdapterError as e:
-                                    logger.warning(
-                                        f"⚠️ Failed to analyze comment for ${ticker}: {str(e)}",
-                                        ticker=ticker,
-                                        error=str(e),
-                                    )
-                                    continue
-
                 except DataAdapterError as e:
                     logger.warning(
                         f"⚠️ Failed to analyze ${ticker}: {str(e)}", ticker=ticker, error=str(e)
                     )
                     continue
+
+            # Analyze comments ONCE per post (not per ticker)
+            # Then distribute sentiment to tickers mentioned in each comment
+            if analyze_comments and post.get("comments"):
+                comments = post.get("comments", [])
+                # Filter comments by minimum score only
+                relevant_comments = [c for c in comments if c.get("score", 0) >= min_comment_score]
+
+                if relevant_comments:
+                    # Limit to top 15 comments to avoid excessive API costs
+                    comments_to_analyze = relevant_comments[:15]
+
+                    logger.info(
+                        f"💬 Analyzing {len(comments_to_analyze)} comments ONCE (will distribute to mentioned tickers)...",
+                        comments_count=len(comments_to_analyze),
+                        post_tickers=tickers,
+                    )
+
+                    # Analyze ALL comments in context of ALL tickers in the post
+                    # Use first ticker as "primary" for analysis context
+                    primary_ticker = tickers[0]
+
+                    try:
+                        comment_sentiments = self.analyze_comments_batch(
+                            ticker=primary_ticker,
+                            post_title=post.get("title", ""),
+                            comments=comments_to_analyze,
+                            batch_size=10,  # Process 10 comments per API call
+                        )
+
+                        # Now distribute each comment's sentiment to relevant ticker(s)
+                        for idx, (comment, sentiment) in enumerate(
+                            zip(comments_to_analyze, comment_sentiments, strict=False), 1
+                        ):
+                            comment_body = comment.get("body", "")
+                            comment_preview = (
+                                comment_body[:150] + "..."
+                                if len(comment_body) > 150
+                                else comment_body
+                            )
+
+                            logger.info(
+                                f'  💭 Comment {idx} (score: {comment.get("score", 0)}): "{comment_preview}"'
+                            )
+
+                            # Determine which ticker(s) this comment is about
+                            mentioned_tickers = []
+                            for ticker in tickers:
+                                ticker_mentioned = (
+                                    ticker.upper() in comment_body.upper()
+                                    or f"${ticker.upper()}" in comment_body
+                                )
+                                if ticker_mentioned:
+                                    mentioned_tickers.append(ticker)
+
+                            # If no specific ticker mentioned, apply to all tickers in post
+                            # (assume comment is about the post's topic)
+                            if not mentioned_tickers and abs(sentiment.score) > 0.3:
+                                mentioned_tickers = tickers
+
+                            # Add sentiment to each mentioned ticker
+                            for ticker in mentioned_tickers:
+                                if ticker not in results:
+                                    results[ticker] = []
+                                results[ticker].append(sentiment)
+                                total_sentiments += 1
+                                total_comments_analyzed += 1
+
+                                comment_emoji = (
+                                    "📈"
+                                    if sentiment.sentiment == "bullish"
+                                    else ("📉" if sentiment.sentiment == "bearish" else "➡️")
+                                )
+                                logger.info(
+                                    f"  {comment_emoji} ${ticker} Analysis: {sentiment.sentiment.upper()} (score: {sentiment.score:+.2f}, confidence: {sentiment.confidence:.2f})"
+                                )
+
+                    except Exception as e:
+                        logger.error(
+                            f"Batched comment analysis failed: {str(e)}",
+                            error=str(e),
+                        )
 
         logger.info(
             f"✅ Batch sentiment analysis complete - {total_sentiments} sentiments ({total_comments_analyzed} from comments) for {len(results)} tickers",

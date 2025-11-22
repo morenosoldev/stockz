@@ -25,9 +25,11 @@ class DataSource(str, Enum):
     """
 
     YAHOO_FINANCE = "yahoo_finance"
+    TWELVE_DATA = "twelve_data"
     ALPHA_VANTAGE = "alpha_vantage"
     FINNHUB = "finnhub"
     NEWS_API = "news_api"
+    CHATBOT_RESEARCH = "chatbot_research"
     INTERNAL = "internal"
     UNKNOWN = "unknown"
 

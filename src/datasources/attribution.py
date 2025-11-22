@@ -15,6 +15,7 @@ from src.ops.logging import get_logger
 
 __all__ = [
     "Attribution",
+    "DataSource",
     "AttributionError",
     "create_attribution",
     "validate_attribution",

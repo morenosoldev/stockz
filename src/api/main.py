@@ -4,12 +4,19 @@ Main entry point for the Recover-Bot API service.
 Includes middleware, exception handlers, and route registration.
 """
 
+# CRITICAL: Load .env BEFORE any imports that use get_config()
+# This ensures environment variables are available when modules initialize
+from dotenv import load_dotenv
+
+load_dotenv()
+
+# Now safe to import modules that call get_config() at module level
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from typing import Any
 
-from dotenv import load_dotenv
 from fastapi import FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -20,8 +27,10 @@ from src.api.routes import candidates, chat, health, metrics, runs, scan, stream
 from src.ops.config import get_config
 from src.ops.logging import get_logger
 
-# Load environment variables from .env file
-load_dotenv()
+# Suppress noisy third-party HTTP client logs
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("openai").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 logger = get_logger(__name__)
 

@@ -183,14 +183,16 @@ class SentimentAnalyzer(CachedDataAdapter):
         ticker: str,
         title: str,
         body: str = "",
+        flair: str = "",
         metadata: dict[str, Any] | None = None,
     ) -> SentimentScore:
-        """Analyze sentiment of a Reddit post.
+        """Analyze sentiment of a Reddit post with flair-aware loss porn detection.
 
         Args:
             ticker: Stock ticker symbol
             title: Post title
             body: Post body/selftext (optional)
+            flair: Post flair (e.g., "Loss", "Gain", "YOLO", "DD") for context
             metadata: Optional metadata (score, comments, etc.)
 
         Returns:
@@ -199,11 +201,12 @@ class SentimentAnalyzer(CachedDataAdapter):
         Raises:
             DataAdapterError: If LLM call fails
         """
-        # Create cache key
+        # Create cache key (include flair for cache uniqueness)
         cache_key = {
             "ticker": ticker.upper(),
             "title": title[:200],  # Limit length for cache key
             "body": body[:500] if body else "",
+            "flair": flair,
             "model": self.model,
         }
 
@@ -233,7 +236,34 @@ class SentimentAnalyzer(CachedDataAdapter):
                 extra={"ticker": ticker, "model": self.model},
             )
 
-            # Create the balanced growth-focused prompt
+            # Create the balanced growth-focused prompt with flair context
+            flair_context = ""
+            if flair:
+                flair_lower = flair.lower()
+                # Detect loss porn flairs
+                if any(keyword in flair_lower for keyword in ["loss", "losses", "rip", "f"]):
+                    flair_context = f"""
+
+⚠️ FLAIR: '{flair}' - This is a LOSS PORN post.
+The author is describing LOSSES, not gains. Treat this as BEARISH sentiment unless the post is clearly ironic/joking."""
+                elif any(keyword in flair_lower for keyword in ["gain", "gains", "profit", "win"]):
+                    flair_context = f"""
+
+✅ FLAIR: '{flair}' - This is a GAIN post.
+The author is celebrating profits. This is bullish sentiment."""
+                elif any(keyword in flair_lower for keyword in ["yolo", "bet"]):
+                    flair_context = f"""
+
+🎲 FLAIR: '{flair}' - This is a YOLO/gambling post.
+The author is making a risky bet. Analyze carefully for conviction vs speculation."""
+                elif any(keyword in flair_lower for keyword in ["dd", "due diligence", "research"]):
+                    flair_context = f"""
+
+📊 FLAIR: '{flair}' - This is a research/DD post.
+The author likely did research. Weight conviction_score higher."""
+                else:
+                    flair_context = f"\n\nFLAIR: '{flair}'"
+
             prompt = f"""You are a growth-focused investment analyst who evaluates stocks based on BOTH current fundamentals AND future potential.
 
 Your philosophy:
@@ -242,7 +272,7 @@ Your philosophy:
 - Be open-minded to contrarian opportunities
 - High risk + high reward = bullish if the upside is 10x+
 
-Analyze this Reddit post/comment about {ticker.upper()}:
+Analyze this Reddit post/comment about {ticker.upper()}:{flair_context}
 
 Title: {title}
 
@@ -565,6 +595,7 @@ IMPORTANT: Return ONLY a JSON array with exactly {len(batch)} objects, no explan
                         ticker=ticker,
                         title=post.get("title", ""),
                         body=post.get("selftext", ""),
+                        flair=post.get("flair", ""),  # Pass flair for loss porn detection
                         metadata={
                             "post_id": post.get("id"),
                             "score": post.get("score"),

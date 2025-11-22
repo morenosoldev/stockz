@@ -28,6 +28,204 @@ from src.ops.logging import get_logger
 logger = get_logger(__name__)
 
 
+# Comprehensive ticker blacklist - common words that aren't stock tickers
+# Applied to both $TICKER and standalone uppercase word patterns
+TICKER_BLACKLIST = {
+    # Common single letters
+    "A",
+    "I",
+    # Reddit/Trading slang
+    "WSB",
+    "DD",
+    "YOLO",
+    "CEO",
+    "CFO",
+    "IPO",
+    "ETF",
+    "FD",
+    "TA",
+    "IV",
+    "FOMO",
+    "FUD",
+    "HODL",
+    "IMO",
+    "IMHO",
+    "TBH",
+    "NGL",
+    "BTW",
+    "FYI",
+    "PSA",
+    "TIL",
+    "ELI5",
+    "TLDR",
+    "AMA",
+    "ITM",
+    "OTM",
+    "GUH",
+    "BTFD",
+    "GG",
+    "GL",
+    "RIP",
+    "LFG",
+    "THE",
+    # Trading actions (FALSE POSITIVES)
+    "BUY",
+    "SELL",
+    "HOLD",
+    "LONG",
+    "SHORT",
+    # Financial metrics
+    "YOY",
+    "QOQ",
+    "MOM",
+    "WOW",
+    "GDP",
+    "CPI",
+    "PPI",
+    "API",
+    "EPS",
+    "PE",
+    "PS",
+    "PB",
+    "ROE",
+    "ROI",
+    "ROA",
+    "EBIT",
+    "EBITDA",
+    "FCF",
+    "NPV",
+    "IRR",
+    "CAGR",
+    "YTD",
+    "MTD",
+    "QTD",
+    "ATH",
+    "ATL",
+    "AH",
+    "PM",
+    "Q1",
+    "Q2",
+    "Q3",
+    "Q4",
+    "MAG7",
+    # Markets/Indexes
+    "NYSE",
+    "NASDAQ",
+    "AMEX",
+    "OTC",
+    "DOW",
+    "SPX",
+    "SPY",
+    "QQQ",
+    "VIX",
+    "DIA",
+    "IWM",
+    "DJI",
+    "RUT",
+    # Organizations
+    "USA",
+    "US",
+    "UK",
+    "EU",
+    "UN",
+    "SEC",
+    "FDA",
+    "DOJ",
+    "FBI",
+    "IRS",
+    "EPA",
+    "FTC",
+    "DOD",
+    "CIA",
+    "NSA",
+    "OSHA",
+    "FED",
+    # Technology
+    "IT",
+    "AI",
+    "ML",
+    "AR",
+    "VR",
+    "IOT",
+    "SaaS",
+    "SDK",
+    "AWS",
+    "UI",
+    "UX",
+    "SEO",
+    "CRM",
+    "ERP",
+    "BI",
+    # Time/Date
+    "AM",
+    "EST",
+    "PST",
+    "CST",
+    "MST",
+    "UTC",
+    "GMT",
+    "MON",
+    "TUE",
+    "WED",
+    "THU",
+    "FRI",
+    "SAT",
+    "SUN",
+    "JAN",
+    "FEB",
+    "MAR",
+    "APR",
+    "MAY",
+    "JUN",
+    "JUL",
+    "AUG",
+    "SEP",
+    "OCT",
+    "NOV",
+    "DEC",
+    # Common expressions
+    "LOL",
+    "LMAO",
+    "WTF",
+    "OMG",
+    "IDK",
+    "AFAIK",
+    "IIRC",
+    "SMH",
+    "TY",
+    "NP",
+    "OP",
+    "DM",
+    "DMs",
+    "NSFW",
+    "SFW",
+    # Common words appearing with $
+    "LEAPS",
+    "NEW",
+    "THIS",
+    "CALLS",
+    "PUTS",
+    "CAN",
+    "LOVE",
+    "LOYAL",
+    "NOW",
+    "OF",
+    "PRIME",
+    "YEAR",
+    "YOU",
+    "E",
+    "P",
+    "V",
+    "GH",
+    "ER",
+    "LA",
+    "FAANG",
+    "HHI",
+    "HYSA",
+    "BEZOS",
+}
+
+
 # Update DataSource enum to include Reddit
 class RedditDataSource(str):
     """Reddit data source identifier."""
@@ -427,6 +625,173 @@ class RedditAdapter(CachedDataAdapter):
                 original_error=e,
             ) from e
 
+    def _has_ticker_context(self, ticker: str, text: str) -> bool:
+        """Check if ticker appears with proper stock-related context in text.
+
+        Stage 2 of ticker validation: Verify the ticker isn't just a random
+        uppercase word, but actually appears in a stock-related context.
+
+        Context patterns checked:
+        - $TICKER format (e.g., $AAPL)
+        - "TICKER stock/shares" (e.g., "NVDA stock")
+        - "buy/sell/long/short TICKER" (e.g., "buy NVDA")
+        - "TICKER earnings/calls/puts" (e.g., "NVDA earnings")
+        - "bullish/bearish on TICKER" (e.g., "bullish on NVDA")
+        - "TICKER at/to $price" (e.g., "NVDA at $500")
+
+        Args:
+            ticker: Ticker symbol to check
+            text: Full text to search for context
+
+        Returns:
+            True if ticker appears with stock context, False otherwise
+
+        Example:
+            >>> adapter._has_ticker_context("NVDA", "I think NVDA stock will moon")
+            True
+            >>> adapter._has_ticker_context("BUY", "BUY more shares of NVDA")
+            False
+        """
+        # Pattern 1: $TICKER format (strongest signal)
+        if f"${ticker}" in text:
+            return True
+
+        # Build case-insensitive regex patterns
+        ticker_pattern = rf"\b{ticker}\b"
+
+        # Pattern 2: "TICKER stock/shares/company"
+        if re.search(
+            rf"{ticker_pattern}\s+(stock|shares|share|company|equity|equities)", text, re.IGNORECASE
+        ):
+            return True
+
+        # Pattern 3: "buy/sell/long/short/hold TICKER"
+        if re.search(
+            rf"\b(buy|sell|long|short|hold|bought|sold|buying|selling)\s+{ticker_pattern}",
+            text,
+            re.IGNORECASE,
+        ):
+            return True
+
+        # Pattern 4: "TICKER earnings/calls/puts/options"
+        if re.search(
+            rf"{ticker_pattern}\s+(earnings|calls?|puts?|options?|strike)", text, re.IGNORECASE
+        ):
+            return True
+
+        # Pattern 5: "bullish/bearish on TICKER"
+        if re.search(
+            rf"\b(bullish|bearish|bull|bear)\s+(on\s+)?{ticker_pattern}", text, re.IGNORECASE
+        ):
+            return True
+
+        # Pattern 6: "TICKER at/to $price"
+        if re.search(rf"{ticker_pattern}\s+(at|to|hit|hits|reached?)\s+\$\d+", text, re.IGNORECASE):
+            return True
+
+        return False
+
+    def _validate_with_twelve_data(self, ticker: str) -> bool:
+        """Validate ticker using Twelve Data API.
+
+        Stage 3 of ticker validation: Final authority check using market data API.
+        Results are cached indefinitely since ticker validity doesn't change.
+
+        Args:
+            ticker: Ticker symbol to validate
+
+        Returns:
+            True if ticker exists in Twelve Data, False otherwise
+        """
+        # Check cache first (indefinite TTL for ticker validation)
+        cache_key = f"twelve_validate_{ticker}"
+
+        if self.cache_enabled:
+            cached = self._get_from_cache(cache_key)
+            if cached is not None:
+                logger.debug(
+                    f"Twelve Data validation from cache: {ticker} = {cached}",
+                    extra={"ticker": ticker, "valid": cached, "source": "cache"},
+                )
+                return cached
+
+        # Validate using market data adapter
+        try:
+            from src.datasources.market_data_twelve import TwelveDataAdapter
+            from src.ops.config import get_config
+
+            config = get_config()
+            api_key = config.datasources.twelve_data_api_key
+            if not api_key:
+                logger.warning("Twelve Data API key not configured, skipping validation")
+                return False
+
+            adapter = TwelveDataAdapter(api_key=api_key)
+            is_valid = adapter.validate_ticker(ticker)
+
+            # Cache result indefinitely
+            if self.cache_enabled:
+                self._save_to_cache(cache_key, is_valid)
+
+            logger.debug(
+                f"Twelve Data validation: {ticker} = {is_valid}",
+                extra={"ticker": ticker, "valid": is_valid, "source": "api"},
+            )
+
+            return is_valid
+        except Exception as e:
+            logger.warning(
+                f"Twelve Data validation failed for {ticker}: {e}",
+                extra={"ticker": ticker, "error": str(e)},
+            )
+            # On error, assume invalid (conservative approach)
+            return False
+
+    def _validate_ticker(self, ticker: str, text: str) -> bool:
+        """Validate ticker using 3-stage pipeline: blacklist → context → Twelve Data.
+
+        Stage 1: Blacklist check (instant, free)
+          - Filters ~30% (BUY, SELL, HOLD, DD, YOLO, etc.)
+
+        Stage 2: Context validation (regex, instant, free)
+          - Filters ~40% (no $TICKER, no "TICKER stock", etc.)
+
+        Stage 3: Twelve Data API (cached, rate-limited)
+          - Validates remaining ~30% with authority
+
+        Args:
+            ticker: Ticker symbol to validate
+            text: Full post/comment text for context checking
+
+        Returns:
+            True if ticker is valid, False otherwise
+        """
+        # Stage 1: Blacklist check (instant)
+        if ticker.upper() in TICKER_BLACKLIST:
+            logger.debug(
+                f"Ticker rejected (Stage 1: blacklist): {ticker}",
+                extra={"ticker": ticker, "stage": "blacklist"},
+            )
+            return False
+
+        # Stage 2: Context validation (instant)
+        if not self._has_ticker_context(ticker, text):
+            logger.debug(
+                f"Ticker rejected (Stage 2: no context): {ticker}",
+                extra={"ticker": ticker, "stage": "context"},
+            )
+            return False
+
+        # Stage 3: Twelve Data validation (cached, rate-limited)
+        is_valid = self._validate_with_twelve_data(ticker)
+        if not is_valid:
+            logger.debug(
+                f"Ticker rejected (Stage 3: Twelve Data): {ticker}",
+                extra={"ticker": ticker, "stage": "twelve_data"},
+            )
+
+        return is_valid
+
     def _should_analyze_post(self, submission: Submission) -> bool:
         """Pre-filter: Check if post is likely to contain stock discussions.
 
@@ -679,6 +1044,9 @@ class RedditAdapter(CachedDataAdapter):
         # Extract ticker symbols from title and selftext
         tickers = self._extract_tickers(submission.title + " " + (submission.selftext or ""))
 
+        # Extract flair for loss porn detection
+        flair = submission.link_flair_text or ""
+
         return {
             "id": submission.id,
             "title": submission.title,
@@ -691,7 +1059,8 @@ class RedditAdapter(CachedDataAdapter):
             "url": submission.url,
             "permalink": f"https://reddit.com{submission.permalink}",
             "tickers": tickers,
-            "link_flair_text": submission.link_flair_text,
+            "link_flair_text": flair,
+            "flair": flair,  # Include both for backward compatibility
         }
 
     def _extract_tickers(self, text: str) -> list[str]:
@@ -730,224 +1099,26 @@ class RedditAdapter(CachedDataAdapter):
         # REGEX PATH (Fast - Explicit Tickers)
         # ═══════════════════════════════════════════════════════════════
 
-        # Expanded blacklist to exclude common abbreviations that aren't tickers
-        # Applies to BOTH $TICKER and standalone patterns
-        TICKER_BLACKLIST = {
-            # Original common words
-            "A",
-            "I",
-            "THE",
-            "WSB",
-            "DD",
-            "YOLO",
-            "CEO",
-            "CFO",
-            "IPO",
-            "ETF",
-            "FD",
-            "TA",
-            "IV",
-            # Financial/Economic Terms (Phase 1 + 2)
-            "YOY",
-            "QOQ",
-            "MOM",
-            "WOW",
-            "GDP",
-            "CPI",
-            "PPI",
-            "API",
-            "EPS",
-            "PE",
-            "PS",
-            "PB",
-            "ROE",
-            "ROI",
-            "ROA",
-            "EBIT",
-            "EBITDA",
-            "FCF",
-            "NPV",
-            "IRR",
-            "CAGR",
-            "YTD",
-            "MTD",
-            "QTD",
-            "ATH",
-            "ATL",
-            "AH",
-            "PM",
-            "Q1",
-            "Q2",
-            "Q3",
-            "Q4",  # Quarterly abbreviations
-            "MAG7",  # Magnificent 7
-            # Market Terms (Phase 1)
-            "NYSE",
-            "NASDAQ",
-            "AMEX",
-            "OTC",
-            "DOW",
-            "SPX",
-            "SPY",
-            "QQQ",
-            "VIX",
-            "DIA",
-            "IWM",
-            "DJI",
-            "RUT",
-            # Reddit/Trading Slang (Phase 1)
-            "FOMO",
-            "FUD",
-            "HODL",
-            "IMO",
-            "IMHO",
-            "TBH",
-            "NGL",
-            "BTW",
-            "FYI",
-            "PSA",
-            "TIL",
-            "ELI5",
-            "TLDR",
-            "AMA",
-            "ITM",
-            "OTM",
-            "GUH",
-            "BTFD",
-            "GG",
-            "GL",
-            "RIP",
-            "LFG",
-            "GME",
-            "AMC",
-            # Time/Date Abbreviations (Phase 1)
-            "AM",
-            "EST",
-            "PST",
-            "CST",
-            "MST",
-            "UTC",
-            "GMT",
-            "MON",
-            "TUE",
-            "WED",
-            "THU",
-            "FRI",
-            "SAT",
-            "SUN",
-            "JAN",
-            "FEB",
-            "MAR",
-            "APR",
-            "MAY",
-            "JUN",
-            "JUL",
-            "AUG",
-            "SEP",
-            "OCT",
-            "NOV",
-            "DEC",
-            # Organizations/Government (Phase 1 + 2)
-            "USA",
-            "US",
-            "UK",
-            "EU",
-            "UN",
-            "SEC",
-            "FDA",
-            "DOJ",
-            "FBI",
-            "IRS",
-            "EPA",
-            "FTC",
-            "DOD",
-            "CIA",
-            "NSA",
-            "OSHA",
-            "FED",  # Federal Reserve
-            # Technology/General (Phase 1 + 2)
-            "IT",
-            "AI",
-            "ML",
-            "AR",
-            "VR",
-            "IOT",
-            "SaaS",
-            "SDK",
-            "AWS",
-            "UI",
-            "UX",
-            "SEO",
-            "CRM",
-            "ERP",
-            "BI",
-            # Common Expressions (Phase 1)
-            "LOL",
-            "LMAO",
-            "WTF",
-            "OMG",
-            "IDK",
-            "AFAIK",
-            "IIRC",
-            "SMH",
-            "TY",
-            "NP",
-            "OP",
-            "DM",
-            "DMs",
-            "NSFW",
-            "SFW",
-            # Common words that appear with $ prefix (Phase 2)
-            "HOLD",
-            "LEAPS",
-            "NEW",
-            "THIS",
-            "CALLS",
-            "PUTS",
-            "CAN",
-            "LOVE",
-            "LOYAL",
-            "NOW",
-            "OF",
-            "PRIME",
-            "YEAR",
-            "YOU",
-            "E",
-            "P",
-            "V",
-            "GH",
-            "ER",
-            "LA",
-            "FAANG",
-            "HHI",
-            "HYSA",
-            "BEZOS",
-        }
+        # Pattern 1: $TICKER format
+        dollar_tickers = set(re.findall(r"\$([A-Z]{1,5})\b", text))
 
-        # Pattern 1: $TICKER format (filter blacklist)
-        dollar_tickers = [
-            ticker
-            for ticker in re.findall(r"\$([A-Z]{1,5})\b", text)
-            if ticker not in TICKER_BLACKLIST
-        ]
-
-        # Pattern 2: Standalone uppercase words (1-5 chars, filter blacklist)
-        word_tickers = [
-            word for word in re.findall(r"\b([A-Z]{1,5})\b", text) if word not in TICKER_BLACKLIST
-        ]
+        # Pattern 2: Standalone uppercase words (1-5 chars)
+        word_tickers = set(re.findall(r"\b([A-Z]{1,5})\b", text))
 
         # Combine regex results
-        regex_tickers = set(dollar_tickers + word_tickers)
+        regex_tickers = dollar_tickers | word_tickers
 
-        # Validate regex tickers (format + blacklist check)
+        # Validate regex tickers using 3-stage pipeline
         validated_regex_tickers = {
-            ticker for ticker in regex_tickers if self._ticker_validator.is_likely_stock(ticker)
+            ticker for ticker in regex_tickers if self._validate_ticker(ticker, text)
         }
 
         logger.debug(
-            f"Regex extraction found {len(validated_regex_tickers)} tickers",
+            f"Regex extraction found {len(validated_regex_tickers)} valid tickers (3-stage validation)",
             extra={
-                "regex_tickers": sorted(validated_regex_tickers),
+                "raw_count": len(regex_tickers),
+                "validated_count": len(validated_regex_tickers),
+                "validated_tickers": sorted(validated_regex_tickers),
                 "rejected": sorted(regex_tickers - validated_regex_tickers),
             },
         )

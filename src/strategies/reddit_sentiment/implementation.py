@@ -5,6 +5,7 @@ from typing import Any
 from src.analysis.technical_analyzer import TechnicalAnalyzer
 from src.datasources.aggregation import aggregate_ticker_sentiments
 from src.datasources.company import CompanyAdapter
+from src.datasources.post_classifier import PostClassifier
 from src.datasources.reddit import RedditAdapter
 from src.datasources.sentiment import SentimentAnalyzer
 from src.datasources.technical import TechnicalDataAdapter
@@ -92,6 +93,13 @@ class RedditSentimentStrategy(BaseStrategy):
         self.research_batch_size = params.get("research_batch_size", 10)
         self.research_max_claims_to_verify = params.get("research_max_claims_to_verify", 10)
 
+        # Post classification configuration
+        self.classify_posts = params.get("classify_posts", True)
+        self.filter_loss_porn = params.get("filter_loss_porn", True)
+        self.filter_memes = params.get("filter_memes", True)
+        self.min_post_score = params.get("min_post_score", 10)
+        self.max_post_age_days = params.get("max_post_age_days", 7)
+
         # Technical analysis configuration
         self.technical_analysis_enabled = params.get("technical_analysis_enabled", False)
         self.technical_lookback_days = params.get("technical_lookback_days", 90)
@@ -104,6 +112,7 @@ class RedditSentimentStrategy(BaseStrategy):
         # Initialize adapters (lazy load to avoid API calls during registration)
         self._reddit_adapter: RedditAdapter | None = None
         self._sentiment_analyzer: SentimentAnalyzer | None = None
+        self._post_classifier: PostClassifier | None = None
         self._company_adapter: CompanyAdapter | None = None
         self._technical_adapter: TechnicalDataAdapter | None = None
         self._technical_analyzer: TechnicalAnalyzer | None = None
@@ -136,6 +145,13 @@ class RedditSentimentStrategy(BaseStrategy):
         if self._sentiment_analyzer is None:
             self._sentiment_analyzer = SentimentAnalyzer(cache_enabled=True)
         return self._sentiment_analyzer
+
+    @property
+    def post_classifier(self) -> PostClassifier:
+        """Lazy-load post classifier."""
+        if self._post_classifier is None:
+            self._post_classifier = PostClassifier()
+        return self._post_classifier
 
     @property
     def company_adapter(self) -> CompanyAdapter:
@@ -242,6 +258,56 @@ class RedditSentimentStrategy(BaseStrategy):
             subreddit_count=len(self.subreddits),
         )
 
+        # ════════════════════════════════════════════════════════════════
+        # PRE-FILTERING: Quick quality filters before expensive LLM calls
+        # ════════════════════════════════════════════════════════════════
+
+        logger.info("🔍 Applying pre-filters to posts...")
+
+        filtered_posts = []
+        filter_stats = {
+            "low_score": 0,
+            "too_old": 0,
+            "no_tickers": 0,
+            "passed": 0,
+        }
+
+        from datetime import UTC, datetime, timedelta
+
+        cutoff_date = datetime.now(UTC) - timedelta(days=self.max_post_age_days)
+
+        for post in all_posts:
+            # Filter 1: Minimum score (engagement filter)
+            if post.get("score", 0) < self.min_post_score:
+                filter_stats["low_score"] += 1
+                continue
+
+            # Filter 2: Post age (recency filter)
+            post_date = post.get("created_utc")
+            if post_date and post_date < cutoff_date:
+                filter_stats["too_old"] += 1
+                continue
+
+            # Filter 3: Must mention at least one ticker
+            if not post.get("tickers"):
+                filter_stats["no_tickers"] += 1
+                continue
+
+            # Passed all filters
+            filter_stats["passed"] += 1
+            filtered_posts.append(post)
+
+        filter_rate = (1 - filter_stats["passed"] / len(all_posts)) * 100 if all_posts else 0
+        logger.info(
+            f"✅ Pre-filtering complete: {filter_stats['passed']}/{len(all_posts)} posts passed ({filter_rate:.1f}% filtered)",
+            total_posts=len(all_posts),
+            passed=filter_stats["passed"],
+            filter_rate_pct=filter_rate,
+            low_score=filter_stats["low_score"],
+            too_old=filter_stats["too_old"],
+            no_tickers=filter_stats["no_tickers"],
+        )
+
         logger.info("🤖 Analyzing sentiment for tickers mentioned in posts and comments...")
 
         # Analyze sentiment (including comments) unless interrupted
@@ -249,12 +315,12 @@ class RedditSentimentStrategy(BaseStrategy):
             logger.info(
                 "⏹️ Scan interrupted before sentiment analysis phase",
                 run_id=run_id,
-                posts=len(all_posts),
+                posts=len(filtered_posts),
             )
             sentiment_results = {}
         else:
             sentiment_results = self.sentiment_analyzer.analyze_batch(
-                all_posts, analyze_comments=True, min_comment_score=self.min_comment_score
+                filtered_posts, analyze_comments=True, min_comment_score=self.min_comment_score
             )
 
         logger.info(

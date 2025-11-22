@@ -32,7 +32,7 @@ parameters:
       conviction: 0.3
     min_conviction_threshold: 0.3
     potential_boost_threshold: 0.7
-  research_enabled: false
+  research_enabled: true
   research_comments_limit: 20
   research_batch_size: 10
   research_max_claims_to_verify: 10
